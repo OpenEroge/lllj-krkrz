@@ -1,0 +1,313 @@
+// LLLJ compat prelude. Runs once at VM init (after SysInitScript, before startup.tjs).
+// It wraps Plugins.link so the game's Windows DLL names resolve to
+//   - a statically linked krkrz_dev plugin (name remap), or
+//   - a TJS shim that installs native (LLLJNative) or stub members.
+// NOTES
+//  - keep the at-sign character out of this file (cmake @ONLY embedding)
+//  - functions are global functions (context = global). Methods stored in a
+//    Dictionary do NOT fall back to global for unqualified names.
+
+// krkrz SysInitScript defines "const kirikiriz_generic=1" (meaning "console build").
+// The game would then ignore Plugins.link and switch to its Switch UI; we want the PC path.
+try { delete global.kirikiriz_generic; } catch (e) {}
+if (typeof global.kirikiriz_generic != "undefined") {
+	try { global.kirikiriz_generic = 0; } catch (e) { LLLJNative.log("(lllj) cannot reset kirikiriz_generic: " + e.message); }
+}
+
+global.LLLJ = %[
+	shims : %[],
+	loaded : %[],
+	warned : %[],
+	stubret : %[],
+	// static krkrz_dev plugins (registered name) for the game's DLL names
+	realName : %[
+		"kagparserex.dll" => "KAGParserEx",
+		"csvparser.dll" => "csvParser",
+		"getsample.dll" => "getSample",
+		"json.dll" => "json",
+		"layerexbtoa.dll" => "layerExBTOA",
+		"layereximage.dll" => "layerExImage",
+		"layerexraster.dll" => "layerExRaster",
+		"savestruct.dll" => "saveStruct",
+		"scriptsex.dll" => "scriptsEx",
+		"shrinkcopy.dll" => "shrinkCopy",
+		"extrans.dll" => "extrans",
+		"extnagano.dll" => "extNagano",
+		"alphamovie.dll" => "AlphaMovie",
+		"layerexsave.dll" => "layerExSave",
+		"psd.dll" => "psdfile"
+	],
+	origLink : Plugins.link,
+	origUnlink : Plugins.unlink
+];
+
+function lllj_log(m) { LLLJNative.log("(lllj) " + m); }
+
+function lllj_stubhit(name) {
+	if (!LLLJ.warned[name]) { LLLJ.warned[name] = true; lllj_log("stub: " + name); }
+	return LLLJ.stubret[name];
+}
+// returns a function that logs once and returns ret
+function lllj_stub(name, ret) {
+	LLLJ.stubret[name] = ret;
+	return Scripts.eval("(function() { return global.lllj_stubhit(\"" + name + "\"); })");
+}
+// install stub members (name => return value) on obj, unless already present
+function lllj_stubs(obj, prefix, dict) {
+	var keys = [];
+	keys.assign(dict);
+	for (var i = 0; i < keys.count; i += 2) {
+		var k = keys[i];
+		var t;
+		try { t = typeof obj[k]; } catch (e) { continue; } // e.g. instance-only property on a class
+		if (t == "undefined" || t == "void") obj[k] = lllj_stub(prefix + "." + k, keys[i+1]);
+	}
+}
+
+function lllj_link(name) {
+	var key = Storages.extractStorageName(name).toLowerCase();
+	if (LLLJ.loaded[key]) return;
+	var rn = LLLJ.realName[key];
+	if (rn !== void) {
+		LLLJ.loaded[key] = true;
+		LLLJ.origLink(rn);
+		return;
+	}
+	var shim = LLLJ.shims[key];
+	if (shim !== void) {
+		LLLJ.loaded[key] = true;
+		lllj_log("shim plugin: " + key);
+		shim();
+		return;
+	}
+	LLLJ.origLink(name);
+}
+function lllj_unlink(name) {
+	var key = Storages.extractStorageName(name).toLowerCase();
+	if (LLLJ.loaded[key] !== void) return; // never unload shims
+	LLLJ.origUnlink(name);
+}
+Plugins.link = lllj_link;
+Plugins.unlink = lllj_unlink;
+
+function lllj_shim(names, func) {
+	if (typeof names == "String") names = [names];
+	for (var i = 0; i < names.count; i++) LLLJ.shims[names[i]] = func;
+}
+
+// Win32-only core APIs missing from the generic (SDL) build
+lllj_stubs(System, "System", %[ readRegValue: void, writeRegValue: void ]);
+
+// ---------------------------------------------------------------------------
+// shims
+// ---------------------------------------------------------------------------
+function lllj_nothing() {}
+
+// built into the engine already (Vorbis / Opus decoders, movie decoders, ...)
+lllj_shim(["wuvorbis.dll", "wuopus.dll", "krmovie.dll", "kagexopt.dll", "lzfs.dll", "yuzuex.dll"], lllj_nothing);
+
+// PackinOne: bundle of old plugins
+function lllj_shim_packinone() {
+	var names = ["csvparser.dll", "layereximage.dll", "layerexraster.dll", "layerexbtoa.dll",
+				 "savestruct.dll", "scriptsex.dll", "shrinkcopy.dll", "fstat.dll", "proxyfs.dll"];
+	for (var i = 0; i < names.count; i++) lllj_link(names[i]);
+	Scripts.loadDataPack = LLLJNative.loadDataPack;
+	Scripts.saveDataPack = LLLJNative.saveDataPack;
+	Scripts.makeDataPackDigest = LLLJNative.makeDataPackDigest;
+	Scripts.makeDataPackThumb = lllj_makeDataPackThumb;
+}
+lllj_shim("packinone.dll", lllj_shim_packinone);
+// Save files are "<thumbnail image bytes><data pack>"; the thumbnail is made from the
+// layer the game passes in and returned as an octet for saveDataPack.
+function lllj_makeDataPackThumb(layer, ext, quality, component) {
+	if (!(layer instanceof "Layer")) return void;
+	var e = (ext == "png") ? "png" : "jpg";
+	var tmp = System.dataPath + "lllj_thumb_tmp." + e;
+	try {
+		layer.saveLayerImage(tmp, (e == "jpg" && quality !== void) ? ("jpg" + quality) : e);
+		return LLLJNative.readOctet(tmp);
+	} catch (ex) {
+		lllj_log("makeDataPackThumb: " + ex.message);
+	}
+	return void;
+}
+
+// Storages.fstat / dirlist / ... are built into krkrz
+lllj_shim("fstat.dll", lllj_nothing);
+function lllj_shim_proxyfs() {
+	if (typeof global.ProxyStorageMap == "undefined") global.ProxyStorageMap = %[];
+}
+lllj_shim("proxyfs.dll", lllj_shim_proxyfs);
+
+function lllj_shim_getlangname() {
+	lllj_stubs(System, "System", %[ getCurrentUILangName: "ja", getUserDefaultUILanguage: 0x411,
+		getSystemDefaultUILanguage: 0x411 ]);
+}
+lllj_shim("getlangname.dll", lllj_shim_getlangname);
+
+function lllj_shim_win32dialog() {
+	var c = ["WS_BORDER", 0x00800000, "WS_TABSTOP", 0x00010000, "WS_VSCROLL", 0x00200000,
+		"WS_CHILD", 0x40000000, "WS_VISIBLE", 0x10000000, "WS_GROUP", 0x00020000,
+		"CBS_DROPDOWN", 2, "CBS_DROPDOWNLIST", 3, "ES_LEFT", 0, "LBS_NOTIFY", 1, "LVS_REPORT", 1,
+		"TBS_AUTOTICKS", 1, "TBS_HORZ", 0, "IDOK", 1, "IDCANCEL", 2, "IDYES", 6, "IDNO", 7,
+		"WS_CAPTION", 0x00C00000, "WS_DLGFRAME", 0x00400000, "WS_POPUP", 0x80000000, "WS_SYSMENU", 0x00080000,
+		"WS_THICKFRAME", 0x00040000, "WS_MAXIMIZEBOX", 0x00010000, "WS_MINIMIZEBOX", 0x00020000,
+		"WS_OVERLAPPEDWINDOW", 0x00CF0000, "WS_EX_APPWINDOW", 0x40000, "WS_EX_DLGMODALFRAME", 1,
+		"WS_EX_TOOLWINDOW", 0x80, "WS_EX_WINDOWEDGE", 0x100, "GWL_STYLE", -16, "GWL_EXSTYLE", -20,
+		"DS_SHELLFONT", 0x48, "DS_MODALFRAME", 0x80, "DS_SETFONT", 0x40, "DS_CENTER", 0x800];
+	for (var i = 0; i < c.count; i += 2) {
+		WIN32Dialog[c[i]] = c[i+1];
+		if (typeof global[c[i]] == "undefined") global[c[i]] = c[i+1];
+	}
+	WIN32Dialog.Header = %[];
+	WIN32Dialog.Items = %[];
+}
+// win32dialog.dll: no native dialogs here, every dialog is "cancelled"
+class WIN32Dialog {
+	var owner;
+	var modeless = false;
+	function WIN32Dialog(owner) { this.owner = owner; }
+	function finalize() {}
+	function open(win) { lllj_stubhit("WIN32Dialog.open"); return 2; }
+	function close(r) {}
+	function store() {}
+	function makeTemplate() {}
+	function getItem() { return 0; }
+	function getItemText() { return ""; }
+	function setItemText() {}
+	function getItemInt() { return 0; }
+	function setItemInt() {}
+	function setItemEnabled() {}
+	function getItemEnabled() { return true; }
+	function sendItemMessage() { return 0; }
+	function messageBox() { return 2; }
+	function _getValue() { return void; }
+	function _setValue() {}
+	function removeAllBitmap() {}
+	function getBaseUnits() { return %[ h:8, v:16 ]; }
+	function getItemLong() { return 0; }
+	function setItemLong() {}
+	function getNamedId(n) { return 0; }
+	function idFrom() { return 0; }
+	function invalidateAll() {}
+	function setPos() {}
+	function setSize() {}
+	function maximize() {}
+	function restoreMaximize() {}
+	function addBitmap() { return 0; }
+}
+lllj_shim_win32dialog();
+lllj_shim("win32dialog.dll", lllj_nothing);
+
+function lllj_monitor() {
+	var w = System.screenWidth, h = System.screenHeight;
+	var r = %[ x:0, y:0, w:w, h:h, width:w, height:h, left:0, top:0, right:w, bottom:h ];
+	return %[ monitor:r, work:r, primary:true, name:"LLLJ", dpi:96 ];
+}
+function lllj_monitors() { return [ lllj_monitor() ]; }
+// Window members added by windowEx.dll (attached to the native Window class)
+class LLLJWindowExMembers {
+	function lllj_get(n, d) { return (typeof this[n] != "undefined") ? this[n] : d; }
+	property maximizeBox { getter() { return lllj_get("_lllj_maxbox", true); } setter(v) { this._lllj_maxbox = v; } }
+	property minimizeBox { getter() { return lllj_get("_lllj_minbox", true); } setter(v) { this._lllj_minbox = v; } }
+	property exSystemMenu { getter() { return lllj_get("_lllj_exsysmenu", void); } setter(v) { this._lllj_exsysmenu = v; } }
+	property enableNCMouseEvent { getter() { return lllj_get("_lllj_ncmouse", false); } setter(v) { this._lllj_ncmouse = v; } }
+	function resetWindowIcon() {}
+	function setWindowIcon() {}
+	function setOverlayBitmap() {}
+	function resetExSystemMenu() {}
+	function ncHitTest() { return 1; }
+	function focusMenuByKey() {}
+	function setMessageHook() {}
+	function bringTo() {}
+	function sendToBack() {}
+	function acquireImeControl() {}
+	function resetImeContext() {}
+	function setWindowCornerPreference() {}
+	function getNotificationNum() { return 0; }
+	function getNotificationName() { return ""; }
+	function registerExEvent() {}
+	function registerHotKey() { return true; }
+	function unregisterHotKey() { return true; }
+}
+function lllj_shim_windowex() {
+	if (typeof System.getDisplayMonitors == "undefined") System.getDisplayMonitors = lllj_monitors;
+	if (typeof System.getMonitorInfo == "undefined") System.getMonitorInfo = lllj_monitor;
+	lllj_stubs(System, "System", %[
+		setDpiAwareness: 0, getCursorPos: void, setCursorPos: void, setClipCursor: void,
+		getSystemMetrics: 0, readEnvValue: "", expandEnvString: "", setApplicationIcon: void,
+		setIconicPreview: void, getDoubleClickTime: 500, findWindowEx: 0, classLongPtr: 0,
+		loadCursor: 0, mapVirtualKey: 0, breathe: void, isBreathing: false,
+		clearGraphicCache: void, getAboutString: "", getCPUType: "" ]);
+	var n = LLLJNative.attachMembers(LLLJWindowExMembers, Window);
+	lllj_log("windowEx: attached " + n + " Window members");
+	var consts = ["nchtError", -2, "nchtTransparent", -1, "nchtNoWhere", 0, "nchtClient", 1, "nchtCaption", 2,
+		"nchtSysMenu", 3, "nchtSize", 4, "nchtGrowBox", 4, "nchtMenu", 5, "nchtHScroll", 6, "nchtVScroll", 7,
+		"nchtMinButton", 8, "nchtReduce", 8, "nchtMaxButton", 9, "nchtZoom", 9, "nchtLeft", 10, "nchtRight", 11,
+		"nchtTop", 12, "nchtTopLeft", 13, "nchtTopRight", 14, "nchtBottom", 15, "nchtBottomLeft", 16,
+		"nchtBottomRight", 17, "nchtBorder", 18];
+	for (var i = 0; i < consts.count; i += 2) if (typeof Window[consts[i]] == "undefined") Window[consts[i]] = consts[i+1];
+}
+lllj_shim("windowex.dll", lllj_shim_windowex);
+
+// MenuItem (below) is defined unconditionally; menu.dll itself has nothing else to add
+lllj_shim("menu.dll", lllj_nothing);
+
+lllj_shim(["drawdeviced2d.dll"], lllj_nothing);
+lllj_shim(["k2compat.dll", "msdfrender.dll", "layerstwcopy.dll"], lllj_nothing);
+lllj_shim(["wfbasiceffect.dll", "wftypicaldsp.dll", "wumultitrack.dll", "wvdecoder.dll"], lllj_nothing);
+lllj_shim(["httprequest.dll", "win32ole.dll", "gamepad.dll", "shellexecute.dll", "process.dll",
+		   "messenger.dll", "addfont.dll"], lllj_nothing);
+
+function lllj_shim_toml() { Scripts.tomlDecodeFromStorage = LLLJNative.tomlDecodeFromStorage; }
+lllj_shim("toml.dll", lllj_shim_toml);
+
+// TODO (real implementations needed)
+lllj_shim(["psbfile.dll", "textrender.dll", "layerexdraw.dll"], lllj_nothing);
+lllj_shim(["motionplayer.dll", "motionplayer_nod3d.dll"], lllj_nothing);
+
+// Minimal MenuItem replacement (no native menus on this platform)
+class MenuItem {
+	var children = [];
+	var parent;
+	var caption = "";
+	var checked = false;
+	var enabled = true;
+	var visible = true;
+	var group = 0;
+	var radio = false;
+	var shortcut = "";
+	var rightJustify = false;
+	var bmpItem = 0;
+	var bmpChecked = 0;
+	var bmpUnchecked = 0;
+	var index = 0;
+	var owner;
+	function MenuItem(owner, caption) { this.owner = owner; if (caption !== void) this.caption = caption; }
+	function finalize() {}
+	function add(item) { item.parent = this; item.index = children.count; children.add(item); }
+	function insert(item, idx) { item.parent = this; children.insert(idx, item); }
+	function remove(item) { children.remove(item); }
+	function popup() {}
+	function popupEx() { return 0; }
+	property root { getter() { return parent === void ? this : parent.root; } }
+	property HMENU { getter() { return 0; } }
+	property window { getter() { return owner; } }
+}
+// MenuItemEx (windowEx) bitmap ids
+{
+	var c = ["biSystem", 1, "biRestore", 2, "biMinimize", 3, "biClose", 5, "biCloseDisabled", 6,
+		"biMinimizeDisabled", 7, "biPopupClose", 8, "biPopupRestore", 9, "biPopupMaximize", 10, "biPopupMinimize", 11];
+	for (var i = 0; i < c.count; i += 2) MenuItem[c[i]] = c[i+1];
+}
+
+// gamepad.dll replacement for the prototype: no XInput ports (krkrz has its own SDL pad input)
+class GamepadPort {
+	var count = 0;
+	function GamepadPort() {}
+	function finalize() {}
+	function initialize(hwnd) { return false; }
+	function getController(i) { return void; }
+	function update() {}
+	function redetect() {}
+}

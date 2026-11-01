@@ -1,0 +1,126 @@
+diff --git a/sdl3/base/FileImpl.cpp b/sdl3/base/FileImpl.cpp
+index 6fc5501..f9918a0 100644
+--- a/sdl3/base/FileImpl.cpp
++++ b/sdl3/base/FileImpl.cpp
+@@ -35,6 +35,71 @@ public:
+ 	virtual tjs_uint64 FileSize(const tjs_char *path);
+ };
+ 
++
++#if !defined(_WIN32)
++// ---------------------------------------------------------------------------
++// LLLJ: case-insensitive path fallback for case-sensitive file systems.
++// Game scripts written for Windows refer to e.g. "system/Initialize.tjs"
++// while the file on disk is "system/initialize.tjs". When the exact path does
++// not exist, each path component is matched case-insensitively (ASCII fold).
++// ---------------------------------------------------------------------------
++#include <dirent.h>
++#include <strings.h>
++#include <sys/stat.h>
++#include <mutex>
++#include <unordered_map>
++#include <vector>
++static std::mutex TVPCaseDirMutex;
++static std::unordered_map<std::string, std::vector<std::string>> TVPCaseDirCache;
++
++static bool TVPFindCaseEntry(const std::string &dir, const std::string &name, std::string &found)
++{
++	std::lock_guard<std::mutex> lock(TVPCaseDirMutex);
++	auto it = TVPCaseDirCache.find(dir);
++	if (it == TVPCaseDirCache.end()) {
++		std::vector<std::string> entries;
++		if (DIR *d = opendir(dir.empty() ? "/" : dir.c_str())) {
++			while (struct dirent *e = readdir(d)) entries.emplace_back(e->d_name);
++			closedir(d);
++		}
++		it = TVPCaseDirCache.emplace(dir, std::move(entries)).first;
++	}
++	for (auto &e : it->second) {
++		if (e.size() == name.size() && strcasecmp(e.c_str(), name.c_str()) == 0) { found = e; return true; }
++	}
++	return false;
++}
++
++// Returns true if path (absolute, UTF-8) was rewritten to an existing path.
++static bool TVPResolvePathCase(std::string &path)
++{
++	struct stat st;
++	if (path.empty() || path[0] != '/' || ::stat(path.c_str(), &st) == 0) return false;
++	std::string result;
++	size_t pos = 1;
++	bool trailing = path.back() == '/';
++	while (pos <= path.size()) {
++		size_t next = path.find('/', pos);
++		if (next == std::string::npos) next = path.size();
++		std::string comp = path.substr(pos, next - pos);
++		pos = next + 1;
++		if (comp.empty()) continue;
++		std::string cand = result + "/" + comp;
++		if (::stat(cand.c_str(), &st) != 0) {
++			std::string real;
++			if (!TVPFindCaseEntry(result, comp, real)) return false;
++			cand = result + "/" + real;
++		}
++		result = cand;
++	}
++	if (trailing) result += '/';
++	path = result;
++	return true;
++}
++#else
++static bool TVPResolvePathCase(std::string &) { return false; }
++#endif
++
+ SDL3FileSystem::SDL3FileSystem()
+ {
+ }
+@@ -68,7 +133,8 @@ SDL3FileSystem::GetListAt(const tjs_char *name, std::function<void(const tjs_cha
+ 	// Convert tjs_char* to UTF-8 for SDL3
+ 	std::string path_utf8;
+ 	TVPUtf16ToUtf8(path_utf8, name);
+-	
++	TVPResolvePathCase(path_utf8);
++
+ 	SDL_PathInfo pathInfo;
+ 	if (SDL_GetPathInfo(path_utf8.c_str(), &pathInfo) && pathInfo.type == SDL_PATHTYPE_DIRECTORY) {
+ 		SDL_GlobFlags flags = SDL_GLOB_CASEINSENSITIVE;
+@@ -133,6 +199,7 @@ SDL3FileSystem::ExistentFile(const tjs_char *path)
+ 		return false;
+ 	}
+ 
++	TVPResolvePathCase(path_utf8);
+ 	SDL_PathInfo pathInfo;
+ 	return SDL_GetPathInfo(path_utf8.c_str(), &pathInfo) && pathInfo.type == SDL_PATHTYPE_FILE;
+ }
+@@ -145,6 +212,7 @@ SDL3FileSystem::ExistentFolder(const tjs_char *path)
+ 	TVPUtf16ToUtf8(path_utf8, path);
+ 	TVPLOG_DEBUG("Checking if folder exists: {}", path_utf8);
+ 
++	TVPResolvePathCase(path_utf8);
+ 	SDL_PathInfo pathInfo;
+ 	return SDL_GetPathInfo(path_utf8.c_str(), &pathInfo) && pathInfo.type == SDL_PATHTYPE_DIRECTORY;
+ }
+@@ -340,6 +408,7 @@ SDL3FileSystem::OpenStream(const tjs_char *path, const tjs_uint32 flags)
+ {
+ 	std::string file_path_utf8;
+ 	TVPUtf16ToUtf8(file_path_utf8, path);
++	if ((flags & TJS_BS_ACCESS_MASK) == TJS_BS_READ) TVPResolvePathCase(file_path_utf8);
+ 	iTJSBinaryStream *stream = SDL_OpenStream(file_path_utf8.c_str(), flags);
+ 	if (stream) return stream;
+ 	return CreateStreamFromSDL(file_path_utf8.c_str(), flags);
+@@ -368,6 +437,7 @@ SDL3FileSystem::LastModifiedFileTime(const tjs_char *path)
+ {
+ 	std::string file_path_utf8;
+ 	TVPUtf16ToUtf8(file_path_utf8, path);
++	TVPResolvePathCase(file_path_utf8);
+ 	SDL_PathInfo pathInfo;
+ 	// フォルダの時刻も返す (WINVER の GetFileAttributesExW と同じ。Storages.getTime 用)
+ 	if (SDL_GetPathInfo(file_path_utf8.c_str(), &pathInfo) &&
+@@ -387,6 +457,7 @@ SDL3FileSystem::FileSize(const tjs_char *path)
+ {
+ 	std::string file_path_utf8;
+ 	TVPUtf16ToUtf8(file_path_utf8, path);
++	TVPResolvePathCase(file_path_utf8);
+ 	SDL_PathInfo pathInfo;
+ 	if (SDL_GetPathInfo(file_path_utf8.c_str(), &pathInfo) && pathInfo.type == SDL_PATHTYPE_FILE) {
+ 		return static_cast<tjs_uint64>(pathInfo.size);

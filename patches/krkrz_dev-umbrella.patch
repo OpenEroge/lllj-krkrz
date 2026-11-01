@@ -1,0 +1,27 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 5ed7834..a9f2941 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -127,6 +127,16 @@ endif()
+ #)
+ #endif()
+ 
++# ---- LLLJ port: build only the plugin set the game needs (all static) ----
++option(KRKRZ_LLLJ "Limelight Lemonade Jam port plugin set" OFF)
++if(KRKRZ_LLLJ)
++    list(APPEND TVP_PLUGIN_FOLDERS ${CMAKE_CURRENT_SOURCE_DIR}/../plugins)
++    set(TVP_PLUGINS KAGParserEx csvParser getSample json layerExBTOA layerExImage
++        layerExRaster psdfile saveStruct scriptsEx shrinkCopy extrans extNagano
++        AlphaMovie layerExSave ${LLLJ_EXTRA_PLUGINS})
++    set(TVP_PLUGINS_STATIC ${TVP_PLUGINS})
++endif()
++
+ # 特殊プラグイン
+ # STEAMプラグインはSDKパスが環境変数で提供された場合のみビルド
+ if(DEFINED ENV{STEAMWORKS_SDK})
+diff --git a/src/core b/src/core
+--- a/src/core
++++ b/src/core
+@@ -1 +1 @@
+-Subproject commit 7d91ba56bcfe241df349b01badd915a156bc47cf
++Subproject commit 7d91ba56bcfe241df349b01badd915a156bc47cf-dirty

@@ -1,0 +1,12 @@
+# upstream engine (tracked as pinned commit + patches/, see patches/UPSTREAM.txt)
+/krkrz_dev/
+# reference sources (re-cloneable)
+/ref/
+# run directory: symlinks into the game's result/ + generated patch.xp3 (tools/setup_game.sh)
+/game/
+# disassembled / decrypted game scripts (regenerate with tools/tjsdis.py and tools/fefe.py)
+/decomp/
+# runtime / test leftovers
+/.replch/
+*.log
+__pycache__/
