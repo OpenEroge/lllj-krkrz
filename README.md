@@ -23,7 +23,7 @@
 
 仓库只跟踪我们自己的代码。`krkrz_dev/`、`ref/`、`game/`、`decomp/` 都在 `.gitignore` 里：
 - 引擎源码：按 `patches/UPSTREAM.txt` clone 到固定 commit 并打补丁；
-- 运行目录：`tools/setup_game.sh`（symlink 到 `result/`，再生成明文 `patch.xp3`）；
+- 运行目录：`tools/setup_game.sh`（默认使用同级的 `../limelight/result/`；也可传入其他 result 路径，创建相对 symlink 并生成明文 `patch.xp3`）；
 - 脚本反汇编：`tools/tjsdis.py --tree` / `tools/fefe.py --tree`。
 
 ## 构建
@@ -35,6 +35,8 @@ cmake --preset x64-linux -DKRKRZ_LLLJ=ON -DLLLJ_EXTRA_PLUGINS=lllj_compat \
       -DKRKRZ_BUILD_TOOLS=OFF -DKRKRZ_USE_ELEMENTS=OFF -DKRKRZ_BUILD_TESTS=OFF
 cmake --build build/x64-linux --config Release -j$(nproc)
 ```
+
+移动项目后，旧的 CMake 构建目录包含绝对路径，需要重新配置和构建。
 
 首次 configure 会通过 vcpkg 编译依赖（约 10 分钟）。系统包：`Mesa-libGLESv2-devel Mesa-libGLESv3-devel yasm systemd-devel libdecor-devel`。
 

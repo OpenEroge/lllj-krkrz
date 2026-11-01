@@ -13,8 +13,8 @@
 
 | 东西 | 位置 |
 |---|---|
-| 工作根目录 | `/var/home/aoba/.homes/dev/lllj-krkrz`（`~/lllj-krkrz`，无空格路径，别挪到游戏目录） |
-| 游戏原始目录 | `/run/host/var/home/aoba/Downloads/limelight_lj_wm (Copy 2)/` |
+| 工作根目录 | 项目仓库目录（与 `limelight/` 同级） |
+| 游戏原始目录 | 项目同级的 `../limelight/` |
 | 解包数据（只读，别改） | `<游戏目录>/result/`；`game/` 里全是指向它的 symlink |
 | 引擎 | `krkrz_dev/`（master + 递归子模块），构建产物 `krkrz_dev/build/x64-linux/core/Release/krkrz` |
 | 我们的代码 | `plugins/lllj_compat/`（全部改动集中在这里 + 两个小 patch） |
@@ -27,7 +27,7 @@
 ## 3. 日常工作流
 
 ```bash
-cd ~/lllj-krkrz && source env.sh
+cd /path/to/lllj-krkrz && source env.sh
 tools/iterate.sh 30                 # 增量编译 + 无头跑 30 秒 + 打印报错（日志在 last.log）
 tools/smoke.sh  /tmp/x 6            # 启动→ATTENTION→标题→はじめから→推进6句，截图 01..04
 tools/savetest.sh /tmp/y            # 在 smoke 基础上测快存/快读
@@ -93,7 +93,7 @@ tools/savetest.sh /tmp/y            # 在 smoke 基础上测快存/快读
 ## 7. 交接给新会话时可以直接贴的开场白
 
 ```
-项目在 ~/lllj-krkrz：krkrz_dev 原生 Linux 移植 ライムライト・レモネードジャム。
-先读 ~/lllj-krkrz/HANDOFF.md 和 PLAN.md，然后做 PLAN.md 的「批次 N」。
+项目在 lllj-krkrz 仓库中：krkrz_dev 原生 Linux 移植 ライムライト・レモネードジャム。
+先读 HANDOFF.md 和 PLAN.md，然后做 PLAN.md 的「批次 N」。
 做完后：跑 tools/smoke.sh 回归、更新 PLAN.md 的勾选和 HANDOFF.md 的现状/已知问题、重新导出 patches/。
 ```
