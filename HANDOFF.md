@@ -23,7 +23,7 @@
 | 解包数据（只读，别改） | `<游戏目录>/result/`；`game/` 里全是指向它的 symlink |
 | 引擎 | `krkrz_dev/`（master + 递归子模块），构建产物 `krkrz_dev/build/x64-linux/core/Release/krkrz` |
 | 我们的代码 | `plugins/lllj_compat/`、`tools/` 和两份引擎补丁 |
-| 本地改动 | `patches/krkrz_dev-umbrella.patch`（`KRKRZ_LLLJ` 选项/宏）、`patches/krkrz-core.patch`（文件查找、索引、SDLOGL 计时/重绘） |
+| 本地改动 | `patches/krkrz_dev-umbrella.patch`（`KRKRZ_LLLJ` 选项/宏）、`patches/krkrz-core.patch`（文件查找、索引、SDLOGL 计时/重绘、音频标签调度锁） |
 | 脚本查阅 | `decomp/data|patch/**/*.dis`（字节码反汇编）、`decomp/text/`（解密后的 .ks/.tjs/.toml 文本） |
 | 参考实现 | `ref/krkr-ns`（MIT，最重要：emoteplayer/视频/layerexdraw 都在 `krkrsdl2/src/plugins` 和 `core/visual/sdl2`）、`ref/msgtool_tjs_ns0.rs`（GPL，只当格式说明） |
 | 上次 krkrsdl2 尝试的计划 | `~/.claude/plans/https-github-com-krkrsdl2-krkrsdl2-linu-functional-flamingo.md`（插件矩阵、汉化包分析，可参考） |
@@ -131,6 +131,11 @@ python3 -I tools/verify_windows_saves.py artifacts/win-01
 17. **非 D3D 路径**：本移植（和 Wine 下的原版一样）`kag.isD3D == 0`，`mainwindow.tjs` 因此把 `kag.uibase` 设为无图像的 binder 层。
     原版脚本在流程图退出时往它上面 `piledCopy`，会抛被捕获的 `Not drawable layer type`（Wine 下原版日志同样有）；prelude 给 `PlayBackViewUtil.pile` 加了父层有图像的判断。
 18. **截图对照**：`kag.captureSnapshot` 只含场景层；系统界面和转场中途要用 `layer.piledCopy(0,0,kag.sysbase,...)`（游戏截图功能的做法）。原版引擎没有 `System.captureScreen`。
+19. **音频死锁（上游）**：游玩数分钟后只有游戏卡死，栈为主线程 `GetVisBuffer`（口型）、`SoundDecodeThread` 在 `PushPlaySample → ReschedulePendingLabelEvent`、
+    `SoundEventThread` 在 `Update()`，都卡在 `__lll_lock_wait`。原因是标签调度字段借用了全局缓冲区列表锁，解码线程持缓冲区锁去拿它，事件线程反向拿。
+    已改为调度字段专用的末端锁 `ScheduleMutex`（锁顺序：列表锁 → 缓冲区锁 → `ScheduleMutex`，见 `SoundEventThread.h`）。
+    回归：`python3 tools/audio_lock_stress.py OUT 60`（修复前约 15 秒内会卡；需要更快复现时，可临时在事件线程持列表锁处加 sleep 放大时序）。
+    再卡住时不要关游戏，运行 `tools/grab_hang.sh OUT` 抓全部线程栈。
 
 ## 6. 当前已知问题（详见 PLAN.md 对应批次）
 
@@ -145,6 +150,7 @@ python3 -I tools/verify_windows_saves.py artifacts/win-01
 | 手柄只在无头环境验证了设置页和 `-joypad=dinput` 分支；实体手柄的按键/摇杆需在桌面 `./run.sh` 人工确认 | 批次 5 人工复核 |
 | 汉化 UI、字幕及语言切换尚未挂载；读汉化存档不等于完成汉化 | 批次 6 |
 | 转场仍有布局/软件合成耗时；完整 60Hz 需后续场景实测 | 批次 7 |
+| 上游 `tTVPSoundBuffers::ReschedulePendingLabelEvent` 无锁读 `EventThread`，而 `RemoveBuffer` 可能同时 delete 它（另一个竞态，未修） | 待定 |
 
 批次 1 的 `SetupFullHDMovie`、`onResize` 已清除；前者因空 ProxyStorageMap 宣称了未实现的 `proxy://`，后者因 SDL 设备缺少 `recreate()`。
 53 个去码文件的挂载来源与 MD5 均已核验。16 个无名文件保留哈希名：文件字节可读，回退算法通过独立向量及合成逻辑名请求验证；真实原名仍未反查。
