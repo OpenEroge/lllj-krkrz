@@ -85,7 +85,7 @@ Alt+Enter 切换全屏；缩放和右键返回已回归。系统操作使用游�
 | `tools/xp3plain.py` | 目录打包为明文 XP3 |
 | `tools/iterate.sh` | 编译 + 无头运行 N 秒 + 抓报错 |
 | `tools/smoke.sh` / `tools/savetest.sh` | 完整场景回归，含普通/快速存读档断言 |
-| `tools/benchmark.py` | 1080p 标题、对话各 30 秒及 10 轮转场 |
+| `tools/benchmark.py` | 1080p 标题、对话各 30 秒及 10 轮转场；`--emote` 测 SD、标题开场、eyecatch |
 | `tools/verify_batch1.py` | 索引、哈希、分段存档、导入回归 |
 | `tools/verify_resources.py` | 53 个去码资源的挂载优先级/字节及 16 个无名文件完整性 |
 | `tools/verify_windows_saves.py` | 复制 Windows 存档后实测恢复、缩略图和推进 |
@@ -105,9 +105,13 @@ python3 -I tools/verify_windows_saves.py artifacts/windows-01
 python3 -I tools/benchmark.py artifacts/before-01 --legacy-index
 python3 -I tools/benchmark.py artifacts/after-01
 python3 -I tools/benchmark.py artifacts/desktop-01 --desktop
+python3 -I tools/scenarios.py artifacts/emote-01 --only emote   # 全部 43 个 .mtn
+python3 -I tools/benchmark.py artifacts/emote-desktop-01 --emote --desktop
 ```
 
 Smoke 覆盖正常启动/Logo、标题、新游戏推进、backlog、存读档、CG/SD/音乐/立绘鉴赏入口、10 个设置分页、全屏/缩放、右键返回。
+`--only emote` 覆盖两个 Logo、31 个 SD、9 种标题背景和 eyecatch（每个都要求画面在动），日志出现 `source unsupported` 即失败。
+E-mote 后端可用 `-lllj_emote=cpu|gl` 强制；`LLLJNative.emoteStats()` 返回各阶段耗时。
 SD 和 Logo 的 E-mote 画面仍属批次 2。脚本只接受已确认的 `.mtn` 加载和 DSP 调用点例外；其余异常、REPL 失败和超时返回非零。
 
 `./run.sh -lllj_fps=yes` 每秒输出 `(lllj) fps: {...}`，不需要显示统计叠层。TJS 可用

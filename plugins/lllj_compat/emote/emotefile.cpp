@@ -481,6 +481,36 @@ emoteframe::emoteframe(emotefile* filePtr, uint32_t startOffset) : _filePtr(file
                 src.erase(std::remove(src.begin(), src.end(), '\0'), src.end());
             }
         }
+        // LLLJ: particle emitter parameters
+        it = _rootData.find("prt");
+        if (it != _rootData.end())
+        {
+            std::map<std::string, uint32_t> prt;
+            if (filePtr->parseObject(prt, it->second))
+            {
+                hasPrt = true;
+                auto real = [&](const char* key, double& out) {
+                    auto pos = prt.find(key);
+                    if (pos != prt.end()) filePtr->parseReal(out, pos->second);
+                };
+                real("fmin", prtFmin); real("fmax", prtFmax);
+                if (prt.find("fmax") == prt.end()) prtFmax = prtFmin;
+                real("vmin", prtVmin); real("vmax", prtVmax);
+                if (prt.find("vmax") == prt.end()) prtVmax = prtVmin;
+                real("zmin", prtZmin); real("zmax", prtZmax);
+                if (prt.find("zmax") == prt.end()) prtZmax = prtZmin;
+                real("amin", prtAmin); real("amax", prtAmax);
+                if (prt.find("amax") == prt.end()) prtAmax = prtAmin;
+                real("range", prtRange);
+                auto trig = prt.find("trigger");
+                if (trig != prt.end())
+                {
+                    int64_t value = 0;
+                    filePtr->parseNumber(value, trig->second);
+                    prtTrigger = static_cast<int>(value);
+                }
+            }
+        }
         // mask
         filePtr->parseNumber(mask, _rootData["mask"]);
         // bm
@@ -592,6 +622,39 @@ emotenode::emotenode(emotemotion* rootmotion,
     }
     filePtr->parseNumber(tmp, _rootData["type"]);
     type = static_cast<uint8_t>(tmp);
+    // LLLJ: particle emitter settings
+    it = _rootData.find("particle");
+    if (it != _rootData.end() && filePtr->parseNumber(tmp, it->second))
+    {
+        particleType = static_cast<int>(tmp);
+        auto number = [&](const char* key, int& out) {
+            auto pos = _rootData.find(key);
+            int64_t value = 0;
+            if (pos != _rootData.end() && filePtr->parseNumber(value, pos->second))
+                out = static_cast<int>(value);
+        };
+        number("particleMaxNum", particleMaxNum);
+        number("particleFlyDirection", particleFlyDirection);
+        number("particleInheritAngle", particleInheritAngle);
+        auto accel = _rootData.find("particleAccelRatio");
+        if (accel != _rootData.end())
+            filePtr->parseReal(particleAccelRatio, accel->second);
+        auto motions = _rootData.find("particleMotionList");
+        if (motions != _rootData.end())
+        {
+            std::vector<uint32_t> items;
+            filePtr->parseList(items, motions->second);
+            for (auto item : items)
+            {
+                std::string name;
+                if (filePtr->parseString(name, item))
+                {
+                    name.erase(std::remove(name.begin(), name.end(), '\0'), name.end());
+                    particleMotionList.push_back(name);
+                }
+            }
+        }
+    }
     it = _rootData.find("stencilType");
     if (it != _rootData.end())
     {

@@ -21,6 +21,10 @@ file(GLOB LLLJ_EMOTE_SRC CONFIGURE_DEPENDS ${LLLJ_DIR}/emote/*.cpp)
 # the engine target, so the property is set in that directory's scope.
 set_source_files_properties(${LLLJ_EMOTE_SRC} DIRECTORY ${CMAKE_SOURCE_DIR}/src/core
     PROPERTIES COMPILE_OPTIONS "-include;lllj_emote_prefix.h")
+# Mesh rasterization runs in the isolated-GL backend (LLLJ_EMOTE_GL); the CPU
+# rasterizer remains as the self-test fallback and for -lllj_emote=cpu.
+set_property(SOURCE ${LLLJ_EMOTE_SRC} DIRECTORY ${CMAKE_SOURCE_DIR}/src/core
+    APPEND PROPERTY COMPILE_DEFINITIONS LLLJ_EMOTE_GL)
 
 set(KRKRZ_SRC_ADD ${KRKRZ_SRC_ADD} ${LLLJ_SRC} ${LLLJ_EMOTE_SRC} PARENT_SCOPE)
 set(KRKRZ_INC ${KRKRZ_INC} ${LLLJ_DIR}/src ${CMAKE_CURRENT_BINARY_DIR}

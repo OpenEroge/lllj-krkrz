@@ -43,6 +43,11 @@ public:
     double coordX = 0.0, coordY = 0.0, coordZ = 0.0, angle = 0.0, sx = 0.0, sy = 0.0, zx = 1.0,
            zy = 1.0, ox = 0.0, oy = 0.0, opa = 1.0;
     double timeOffset = 0.0;
+    // LLLJ: particle emitter parameters (content "prt"); see emotenoderef
+    bool hasPrt = false;
+    int prtTrigger = 0;
+    double prtFmin = 0.0, prtFmax = 0.0, prtVmin = 0.0, prtVmax = 0.0;
+    double prtZmin = 1.0, prtZmax = 1.0, prtAmin = 0.0, prtAmax = 0.0, prtRange = 0.0;
     int64_t mask = 0;
     int64_t bm = 0;
     int64_t color = 0;
@@ -99,6 +104,13 @@ public:
     bool isParameterize = false;
     int32_t parameterIdx = -1;
     std::string label;
+    // LLLJ: particle emitter settings ("particle" < 0: not an emitter)
+    int particleType = -1;
+    int particleMaxNum = 0;
+    int particleFlyDirection = 0;
+    int particleInheritAngle = 0;
+    double particleAccelRatio = 1.0;
+    std::vector<std::string> particleMotionList;
     std::vector<std::string> stencilCompositeMaskLayerList;
     std::vector<emoteframe*> frameList;
     std::vector<emotenode*> children;

@@ -82,6 +82,23 @@ namespace emoteplayer
         emoteengine* refTop = nullptr;
         emotemotionref* refMtn = nullptr;
 
+        // LLLJ: particle emitter state (nodes with a "particle" setting).
+        // Behaviour follows the reverse-engineered motionplayer in
+        // github.com/2468785842/krkr2 (PlayerUpdateParticles.cpp).
+        struct Particle
+        {
+            std::shared_ptr<emotemotionref> ref;
+            float birth = 0, x = 0, y = 0, vx = 0, vy = 0, angle = 0, zoom = 1;
+        };
+        std::vector<Particle> particles;
+        float particleLastTick = 0;
+        float particleTimer = 0;
+        bool particleFrequencyActive = false;
+        emoteframe* particleLastFrame = nullptr;
+        uint32_t particleRng = 0x2545F491u;
+        float particleRandom();
+        void updateParticles(float tick, const std::vector<emoteRender>& parentRender, emotelimit lim);
+
         // render method
         std::vector<emoteRender> renderMethod;
 

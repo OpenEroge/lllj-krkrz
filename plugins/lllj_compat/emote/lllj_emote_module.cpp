@@ -37,3 +37,38 @@ tTVPAtStart lllj_emote_register(TVP_ATSTART_PRI_PREPARE,
 	[]() { TVPRegisterPlugin(&lllj_emote_plugin); });
 
 } // namespace
+
+//---------------------------------------------------------------------------
+// LLLJNative.emoteStats(): E-mote time per stage since the previous call
+#include "KrkrNSProf.h"
+#include "lllj_compat.h"
+#include "tjsDictionary.h"
+
+namespace {
+double llljEmoteMs[LLLJ_EMOTE_SLOTS];
+tjs_int llljEmoteCount[LLLJ_EMOTE_SLOTS];
+}
+
+void LLLJEmoteProf(int slot, double ms)
+{
+	if (slot < 0 || slot >= LLLJ_EMOTE_SLOTS) return;
+	llljEmoteMs[slot] += ms;
+	++llljEmoteCount[slot];
+}
+
+LLLJ_NATIVE(emoteStats)
+{
+	static const tjs_char *names[LLLJ_EMOTE_SLOTS] = {
+		TJS_W("progress"), TJS_W("draw"), TJS_W("readback"), TJS_W("lock"),
+		TJS_W("convert"), TJS_W("mesh"), TJS_W("progress_call"), TJS_W("draw_call") };
+	iTJSDispatch2 *d = TJSCreateDictionaryObject();
+	for (int i = 0; i < LLLJ_EMOTE_SLOTS; ++i) {
+		tTJSVariant ms(llljEmoteMs[i]), n(llljEmoteCount[i]);
+		d->PropSet(TJS_MEMBERENSURE, (ttstr(names[i]) + TJS_W("_ms")).c_str(), nullptr, &ms, d);
+		d->PropSet(TJS_MEMBERENSURE, (ttstr(names[i]) + TJS_W("_n")).c_str(), nullptr, &n, d);
+		llljEmoteMs[i] = 0; llljEmoteCount[i] = 0;
+	}
+	if (result) *result = tTJSVariant(d, d);
+	d->Release();
+	return TJS_S_OK;
+}

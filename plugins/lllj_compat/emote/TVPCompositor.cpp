@@ -5,10 +5,10 @@
 #include "EmoteGLRenderBackend.h"
 #endif
 #include "KrkrNSLog.h"
-
-#ifdef LLLJ_EMOTE_GL
-extern SDL_Renderer* TVPGetPrimarySDLRenderer();
-#endif
+#include "Platform.h"
+#include "SysInitIntf.h"
+#include <SDL.h>
+#include <cstring>
 // Set by SDLApplication.cpp while an engine session is being torn down
 // (process exit on the chain-restart path, or the in-process rebuild window).
 extern volatile bool krkrsdl2_engine_teardown_active;
@@ -58,7 +58,17 @@ iTVPRenderBackend* TVPGetRenderBackend()
             wantGl = false;
         }
 #else
-        wantGl = false; // other platforms keep the old opt-in behavior
+        // LLLJ: GL on a hardware driver by default; -lllj_emote=cpu forces
+        // the CPU rasterizer, -lllj_emote=gl forces GL even on software GL.
+        bool forceGl = false;
+        {
+            tTJSVariant opt;
+            if (TVPGetCommandLine(TJS_W("-lllj_emote"), &opt))
+            {
+                wantGl = ttstr(opt) != TJS_W("cpu");
+                forceGl = ttstr(opt) == TJS_W("gl");
+            }
+        }
 #endif
 #ifdef LLLJ_EMOTE_GL
         if (wantGl)
@@ -75,12 +85,26 @@ iTVPRenderBackend* TVPGetRenderBackend()
             // selection open so a later call retries GL.  A genuine self-test
             // failure (renderer present, test still fails) latches the CPU
             // backend exactly as before.
-            if (!TVPGetPrimarySDLRenderer())
+            if (!SDL_GL_GetCurrentWindow()) // LLLJ: no SDL_Renderer in krkrz
             {
                 KRKRNS_LOG("[emote] GL not ready (no primary renderer yet); serving CPU, will retry GL");
                 return &cpu;
             }
-            if (gpu.IsAvailable())
+            // LLLJ: a software GL driver rasterizes slower than the CPU
+            // backend's threaded row bands; keep GL for real GPUs only.
+            bool softwareGl = false;
+            using GetStringFn = const unsigned char* (*)(unsigned int);
+            if (auto getString = reinterpret_cast<GetStringFn>(SDL_GL_GetProcAddress("glGetString")))
+            {
+                const char* name = reinterpret_cast<const char*>(getString(0x1F01 /* GL_RENDERER */));
+                softwareGl = name && (std::strstr(name, "llvmpipe") || std::strstr(name, "softpipe") ||
+                                      std::strstr(name, "swrast"));
+            }
+            if (softwareGl && !forceGl)
+            {
+                selected = &cpu;
+            }
+            else if (gpu.IsAvailable())
             {
                 selected = &gpu;
             }
@@ -97,7 +121,7 @@ iTVPRenderBackend* TVPGetRenderBackend()
             selected = &cpu;
         }
 #ifdef LLLJ_EMOTE_GL
-        KRKRNS_LOG("[emote] selected %s backend", selected == &gpu ? "isolated GL" : "CPU fallback");
+        TVPConsoleLog("selected %s backend", selected == &gpu ? "isolated GL" : "CPU");
 #endif
     }
     return selected;

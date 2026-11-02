@@ -7,7 +7,9 @@
 
 批次 1 已实现：去码包、增量资源索引、Hxv4 回退、隔离场景回归、实际 Swap 计时、游戏专用存档目录及 Windows 读档兼容。
 完整 smoke 和 Windows 继续存档恢复/推进均有截图和断言。基线、验收命令与证据入口见 `PLAN.md` 批次 1。
-**后续**：E-mote、视频、DSP、其余插件、汉化和完整 60Hz 优化仍按各自批次处理。
+批次 2 已实现：E-mote（Logo、标题 9 种背景、eyecatch、全部 SD）由 `plugins/lllj_compat/emote/`（krkr-ns emoteplayer + 本地修正 + 粒子）播放，
+硬件 GL 下网格在 GPU 光栅化。验收数据见 `PLAN.md` 批次 2。
+**后续**：视频、DSP、其余插件、汉化和完整 60Hz 优化仍按各自批次处理。
 
 ## 2. 关键路径
 
@@ -56,6 +58,12 @@ python3 -I tools/verify_windows_saves.py artifacts/win-01
 - **DLL → 实现** 的映射全在 `prelude.tjs`：`LLLJ.realName`（→ 静态链接的 krkrz_dev 插件）和 `lllj_shim(...)`（→ TJS 替身）。
   游戏的 `CanLoadPlugin()` 要求 DLL 文件存在，所以 `run.sh` 在 `game/plugin{,64}/` 放了空占位文件；**新增要被游戏主动加载的 DLL 时，记得把名字加进 `run.sh` 的占位列表**。
 
+- **E-mote**（`emote/`）：krkr-ns emoteplayer 原样 vendor，差异集中在 `emote/shim/` 和带 `LLLJ` 注释的少数改动，清单在 `emote/UPSTREAM.txt`。
+  它注册为静态插件 `lllj_emote`（`lllj_emote_module.cpp`），绑定表仍用 ncbind：`shim/lllj_ncbind.h` 让 krkrz_dev 的 ncbind 用引擎内部头文件，
+  并把 ncbind 类名私有化（否则会和用 tp_stub 编译的静态插件在链接时合并 vtable）。所有 emote 源文件强制包含 `shim/lllj_emote_prefix.h`（替代 krkr-ns 的 PCH）。
+  后端：硬件 GL → 私有 SDL GL 上下文光栅化（创建上下文会重置交换间隔，已恢复）；软件 GL/自检失败 → CPU。`-lllj_emote=cpu|gl` 强制。
+  `LLLJNative.emoteStats()` 给出 progress/draw/读回/转换的耗时；`tools/benchmark.py --emote` 测帧率。
+
 ## 5. 踩过的坑（都已解决，别再踩）
 
 1. **`kirikiriz_generic`**：krkrz 的 SysInitScript 定义了全局常量 `kirikiriz_generic=1`，游戏会当成主机版（忽略 `Plugins.link`、开 Switch UI、xp3 当文件夹）。
@@ -89,7 +97,8 @@ python3 -I tools/verify_windows_saves.py artifacts/win-01
 
 | 现象 | 归属批次 |
 |---|---|
-| 标题背景黑、`title_bg.mtn` 加载异常（被捕获）；Logo/SD/eyecatch 缺 | 批次 2（E-mote） |
+| eyecatch 在桌面平均约 70fps，但最长帧约 38ms（1080p 读回+转换、首次贴图上传）；无 GPU 时约 20fps | 批次 7 |
+| E-mote 尚未与 Wine 原版逐帧对照（Wayland 下截不到原版画面）；粒子语义参照逆向实现 | 批次 8 |
 | 视频不能播（movie-player 只支持 WebM + MPEG-1） | 批次 3 |
 | `voiceeffect.tjs DSP` 异常（电话/对讲机音效缺） | 批次 4 |
 | 颜色选择器依赖 layerExDraw；当前显示色样，禁用缺失的轮盘实现 | 批次 5 |

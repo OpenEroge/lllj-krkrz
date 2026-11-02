@@ -2,6 +2,7 @@
 """Isolated game scenarios with assertions, screenshots and presentation stats."""
 import argparse
 import json
+import re
 import os
 from pathlib import Path
 import signal
@@ -163,6 +164,8 @@ def check_log(path):
             unknown.append(site)
     # Also reject fatal errors and exception headers the parser did not recognize.
     headers = text.count("exception occured")
+    if "source unsupported" in text:  # E-mote content the runtime cannot draw
+        raise AssertionError("E-mote reported an unsupported source; see game.log")
     if headers != len(matches) or unknown or "[dialog] Information:" in text or "prelude error:" in text:
         raise AssertionError(f"Unhandled/unexpected game errors: {unknown}; headers={headers}, parsed={len(matches)}")
     return known
@@ -301,6 +304,49 @@ def controls(session):
     session.step("13_keyboard_advance")
 
 
+EMOTE_EVS = {
+    "sd001a01": "sd001.mtn",
+    "sd002_ea01_ta01": "sd002.mtn",
+    "sd003a02": "sd003.mtn",
+    "sd004_eb01": "sd004.mtn",
+    "sd005a_e01": "sd005.mtn",
+    "sd006a_ta01": "sd006.mtn",
+    "sd007a": "sd007.mtn",
+    "sd008a": "sd008.mtn",
+    "sd009_1": "sd009.mtn",
+    "sd010_t01a": "sd010.mtn",
+    "sd011a_t01a": "sd011.mtn",
+    "sd012a_ea01": "sd012.mtn",
+    "sd013_ea01_ya01": "sd013.mtn",
+    "sd014a_aa01": "sd014.mtn",
+    "sd015_a01_t01_n01": "sd015.mtn",
+    "sd016_e02": "sd016.mtn",
+    "sd101a_e01_r01": "sd101.mtn",
+    "sd102a_e01": "sd102.mtn",
+    "sd103a_e02": "sd103.mtn",
+    "sd104a_e01_y01": "sd104.mtn",
+    "sd105a_ea03_r02": "sd105.mtn",
+    "sd201a": "sd201.mtn",
+    "sd202_01": "sd202.mtn",
+    "sd301_h01_s01_y01": "sd301.mtn",
+    "sd302a_t01_r01": "sd302.mtn",
+    "sd401ab_r09_yc03": "sd401.mtn",
+    "sd402_ra06": "sd402.mtn",
+    "sd403_ra01": "sd403.mtn",
+    "sd404_y01_m01": "sd404.mtn",
+    "sd501a_ra02": "sd501.mtn",
+    "sd601_ra01": "sd601.mtn",
+    "title_bg0": "title_bg.mtn",
+    "title_bg1": "title_bg1.mtn",
+    "title_bg2": "title_bg2.mtn",
+    "title_bg3": "title_bg3.mtn",
+    "title_bg4": "title_bg4.mtn",
+    "title_bg5": "title_bg5.mtn",
+    "title_bg6": "title_bg6.mtn",
+    "title_bg_trial": "title_bg_trial.mtn",
+}
+
+
 def frames_differ(session, prefix, count, interval):
     """Capture count frames; return how many distinct images were seen."""
     import hashlib
@@ -325,18 +371,28 @@ def emote(session):
     session.jump("title.ks", "*game", "game")
     session.wait('typeof world_object.player == "Object" && world_object.player.curPoint > 0', 60)
     session.ev(f"Storages.addAutoPath({json.dumps(str(ROOT / 'tools') + '/')})")
-    for name in ("sd001a01", "sd105a_ea03_r02", "sd601_ra01"):
+    # Every .mtn the title ships: the first [ev] of each SD file (31), the
+    # nine title backgrounds (title_bg7 is already shown at startup with the
+    # all-CG save), and the eyecatch below. Each must load, draw and animate.
+    for name in EMOTE_EVS:
         session.ev(f"tf.llljEv={json.dumps(name)}")
         session.ev('kag.process("emote_test.ks","*ev")')
-        distinct = frames_differ(session, f"08_{name}", 6, 0.4)
-        session.step(f"08_{name}_stats")
-        session.steps[-1]["distinct_frames"] = distinct
-        assert distinct >= 2, f"{name} looks static"
+        distinct = frames_differ(session, f"08_{name}", 5, 0.35)
+        storage = EMOTE_EVS[name]
+        session.steps.append({"name": f"08_{name}", "storage": storage, "distinct_frames": distinct})
+        assert distinct >= 2, f"{name} ({storage}) looks static"
+    session.ev('LLLJNative.resetFrameStats("08_sd_stats")')
+    session.ev('tf.llljEv="sd001a01"')
+    session.ev('kag.process("emote_test.ks","*ev")')
+    session.step("08_sd_stats", 3)
     session.ev('kag.process("emote_test.ks","*eyecatch")')
     distinct = frames_differ(session, "08_eyecatch", 10, 0.25)
     session.steps.append({"name": "08_eyecatch", "distinct_frames": distinct,
                           "note": "Band characters must be on the stairs once state=1 (compare image/アイキャッチキャラ.png)."})
     assert distinct >= 4, "eyecatch looks static"
+    text = (session.out / "game.log").read_text(errors="replace")
+    missing = sorted({v for v in EMOTE_EVS.values()} - set(re.findall(r"load parsed=1: \S*[/>]([^/>\s]+\.mtn)", text)))
+    assert not missing, f"Motions never loaded: {missing}"
     session.write_report()
     return check_log(session.out / "game.log")
 

@@ -437,6 +437,16 @@ void emotenoderef::checkDrawStatus(float tick, std::vector<emoteRender>& renderL
             originX = width / 2;
             originY = height / 2;
         }
+        else if (strcmp(token.c_str(), "particle") == 0)
+        {
+            // LLLJ: emitter area; the node itself draws nothing (particles
+            // are spawned in updateParticles).
+            isNeedDraw = false;
+            width = (tjs_real)frame->zx * 16.0;
+            height = (tjs_real)frame->zy * 16.0;
+            originX = width / 2;
+            originY = height / 2;
+        }
         else
         {
             TVPConsoleLog("source unsupported!!!--->%s", frame->src.c_str());
@@ -886,6 +896,171 @@ void emotenoderef::progress(float tick, std::vector<emoteRender>& renderList, em
                              currentMtnRef->getShapeList().end());
         }
     }
+    if (currentNode->particleType >= 0 && refMtn != nullptr)
+        updateParticles(tick, renderList, lim);
+}
+
+// LLLJ: particle emitter, after the reverse-engineered motionplayer in
+// github.com/2468785842/krkr2 (cpp/plugins/motionplayer/PlayerUpdateParticles.cpp).
+//  - "particle": 0 point, 1 disk of radius 16, 2 box of +-16, scaled and
+//    rotated by the emitter's zoom/angle
+//  - prt.trigger 1: one particle when the keyframe starts; otherwise a
+//    frequency of fmin..fmax particles per second; at most one per frame
+//  - each particle plays a random motion of particleMotionList on its own
+//    clock, moves at vmin..vmax px/frame along the emitter angle +-range,
+//    with angle amin..amax and zoom zmin..zmax; it is removed when a
+//    non-looping motion ends, or the oldest one beyond particleMaxNum
+float emotenoderef::particleRandom()
+{
+    particleRng ^= particleRng << 13;
+    particleRng ^= particleRng >> 17;
+    particleRng ^= particleRng << 5;
+    return (particleRng >> 8) * (1.0f / 16777216.0f);
+}
+
+void emotenoderef::updateParticles(float tick, const std::vector<emoteRender>& parentRender, emotelimit lim)
+{
+    constexpr float PI = 3.14159265358979323846f;
+    float dt = tick - particleLastTick;
+    if (dt < 0)
+    {
+        // the parent clock restarted (loop or replay): start over
+        particles.clear();
+        particleFrequencyActive = false;
+        particleLastFrame = nullptr;
+        dt = 0;
+    }
+    particleLastTick = tick;
+
+    // emission
+    const bool active = frame != nullptr && frame->hasContent && frame->hasPrt &&
+                        frame->src.rfind("particle/", 0) == 0;
+    int emit = 0;
+    if (!active)
+    {
+        particleFrequencyActive = false;
+    }
+    else if (frame->prtTrigger == 1)
+    {
+        if (frame != particleLastFrame)
+            emit = static_cast<int>(frame->prtFmin +
+                                    (frame->prtFmax - frame->prtFmin) * particleRandom());
+    }
+    else if (frame->prtFmin > 0)
+    {
+        auto period = [&]() {
+            const float p0 = 60.0f / (float)frame->prtFmin;
+            const float p1 = frame->prtFmax > 0 ? 60.0f / (float)frame->prtFmax : p0;
+            return p0 == p1 ? p0 : p0 + (p1 - p0) * particleRandom();
+        };
+        if (!particleFrequencyActive)
+            particleTimer = period();
+        particleFrequencyActive = true;
+        particleTimer -= dt;
+        while (particleTimer <= 0)
+        {
+            particleTimer += period();
+            ++emit;
+        }
+        particleTimer = std::min(particleTimer, 60.0f / (float)frame->prtFmin);
+    }
+    particleLastFrame = active ? frame : nullptr;
+
+    const auto& list = currentNode->particleMotionList;
+    if (emit > 0 && !list.empty())
+    {
+        size_t index = static_cast<size_t>(particleRandom() * list.size());
+        if (index >= list.size()) index = list.size() - 1;
+        emotemotion* motion = refTop->findmotionByName(list[index]);
+        if (motion != nullptr)
+        {
+            Particle p;
+            p.ref = std::make_shared<emotemotionref>(motion, refTop, this);
+            p.birth = tick;
+            float ox = 0, oy = 0;
+            if (currentNode->particleType == 2)
+            {
+                ox = particleRandom() * 32.0f - 16.0f;
+                oy = particleRandom() * 32.0f - 16.0f;
+            }
+            else if (currentNode->particleType == 1)
+            {
+                const float a = particleRandom() * 2.0f * PI;
+                const float r = std::sqrt(particleRandom()) * 16.0f;
+                ox = std::cos(a) * r;
+                oy = std::sin(a) * r;
+            }
+            const float rad = currAngle * PI / 180.0f;
+            const float sx = ox * currZx, sy = oy * currZy;
+            p.x = currCoordx + std::cos(rad) * sx - std::sin(rad) * sy;
+            p.y = currCoordy + std::sin(rad) * sx + std::cos(rad) * sy;
+            float speed = (float)frame->prtVmin;
+            if (frame->prtVmax != frame->prtVmin)
+                speed += (float)(frame->prtVmax - frame->prtVmin) * particleRandom();
+            float direction = rad;
+            if (currentNode->particleFlyDirection == 1 && (ox != 0 || oy != 0))
+                direction = std::atan2(p.y - currCoordy, p.x - currCoordx);
+            if (frame->prtRange != 0)
+                direction += ((float)frame->prtRange * 2.0f * particleRandom() -
+                              (float)frame->prtRange) * PI / 180.0f;
+            p.vx = speed * std::cos(direction);
+            p.vy = speed * std::sin(direction);
+            p.angle = (float)frame->prtAmin;
+            if (frame->prtAmax != frame->prtAmin)
+                p.angle += (float)(frame->prtAmax - frame->prtAmin) * particleRandom();
+            if (currentNode->particleInheritAngle)
+                p.angle += direction * 180.0f / PI;
+            p.zoom = (float)frame->prtZmin;
+            if (frame->prtZmax != frame->prtZmin)
+                p.zoom += (float)(frame->prtZmax - frame->prtZmin) * particleRandom();
+            particles.push_back(std::move(p));
+            if ((int)particles.size() > currentNode->particleMaxNum)
+                particles.erase(particles.begin());
+        }
+    }
+
+    // step: move, retire finished one-shot motions, then progress each one
+    const float damping = (float)currentNode->particleAccelRatio;
+    for (size_t i = 0; i < particles.size();)
+    {
+        Particle& p = particles[i];
+        const float age = tick - p.birth;
+        emotemotion* motion = p.ref->currentMotion;
+        if (motion == nullptr || (motion->loopTime < 0 && age > motion->lastTime))
+        {
+            particles.erase(particles.begin() + i);
+            continue;
+        }
+        if (dt > 0)
+        {
+            p.x += p.vx * dt;
+            p.y += p.vy * dt;
+            if (damping != 1.0f)
+            {
+                const float k = std::pow(damping, dt);
+                p.vx *= k;
+                p.vy *= k;
+            }
+        }
+        std::vector<emoteRender> chain = parentRender;
+        emoteRender emt;
+        emt.type = 3;
+        emt.opa = 1.0f;
+        emt.currCoordx = p.x;
+        emt.currCoordy = p.y;
+        emt.currAngle = p.angle;
+        emt.currZx = p.zoom;
+        emt.currZy = p.zoom;
+        emt.currInheritMask = currentNode->inheritMask;
+        emt.originX = lim.originX;
+        emt.originY = lim.originY;
+        emt.width = lim.width;
+        emt.height = lim.height;
+        emt.label = currentNode->label;
+        chain.push_back(emt);
+        p.ref->progress(age, chain, lim);
+        ++i;
+    }
 }
 bool emotenoderef::draw(krkrsdl3::iTVPRenderBackend* renderer, void* target, emotelimit lim, void* maskTarget, bool inMaskPass)
 {
@@ -1208,6 +1383,10 @@ void emotemotionref::draw(krkrsdl3::iTVPRenderBackend* renderer, void* target, e
                 stack.push_back(&(*it));
             }
         }
+        // LLLJ: an emitter's particles are motions of their own
+        for (auto& particle : current->particles)
+            for (auto it = particle.ref->_nodeCache.begin(); it != particle.ref->_nodeCache.end(); ++it)
+                stack.push_back(&(*it));
     }
 
     // 按z排序(同dev分支)

@@ -82,19 +82,39 @@ Xvfb 总耗时 **18.65s → 12.78s**，最长呈现间隔 **652.9ms → 163.6ms*
 
 目标：标题背景动画、yuzulogo/m2logo、eyecatch、SD 小剧场（`sdmotion/` 31 个 + patch 2 个，共 43 个 .mtn，PSB v4）全部正常且满帧。
 
-- [ ] 移植 `ref/krkr-ns/krkrsdl2/src/plugins/emoteplayer/`（≈11k 行，MIT，基于 krkrsdl3）。它提供
-      `Motion.ResourceManager / Player / SeparateLayerAdaptor / D3DAdaptor`、`EmotePlayer`。
-      - 渲染后端：有 `EmoteSWRenderBackend`（CPU，含 NEON/simde）和 `EmoteGLRenderBackend`。krkrz 的默认绘制设备是 `SDLOGLDrawDevice`（GLES 3.2），
-        **优先接 GL 后端**（性能），SW 后端作为回退和对照。
-      - 先删 `__SWITCH__`、`KrkrNSLog/Prof` 相关；`Platform.h` 已有替身；注意 ODR（见 HANDOFF 坑 3）。
-- [ ] 让游戏走 `motionplayer_nod3d.dll` 路径（`-nod3dm=yes` 或在 prelude 里决定），避免 `D3DEmotePlayer`；
-      之后视需要再支持 d3d 路径（`system/d3d.tjs`）。在 `run.sh` 加 motionplayer 占位 DLL。
-- [ ] 游戏侧用到的方法（来自脚本分析）：`play`、`playTimeline`、`setTimelineBlendRatio`、`getMainTimelineLabelList`、`setVariable`、
-      `initPhysics`、`setDrawAffineTranslateMatrix`、`serialize`、`progress`、`skipToSync`。逐个核对。
-- [ ] 资源：`.mtn` 是 PSB，可能有 `lzfs://` / MDF 压缩 / `setEmotePSBDecryptSeed` 加密；`tools/psbdump.py` 可用来看结构。
-- [ ] 视觉对照：在 Wine 下截同一帧（HANDOFF 里有 Wine/Lutris 环境说明，见旧记忆 `lllj-xp3-roundtrip`），逐个比遮罩、混合模式、时间轴混合、物理（头发/胸部摆动）、眨眼。
+- [x] 移植 krkr-ns emoteplayer（MIT）到 `plugins/lllj_compat/emote/`，与上游的差异见其中 `UPSTREAM.txt`。
+      ncbind 绑定表原样保留（shim 让它用引擎内部头文件，类名私有化避免与静态插件合并）。
+      GL 后端（私有 SDL GL 上下文光栅化网格，读回 Layer）用于硬件 GL；软件 GL 或自检失败时用 CPU 光栅化；`-lllj_emote=cpu|gl` 可强制。
+- [x] 只放 `motionplayer_nod3d.dll` 占位，prelude 映射到静态插件 `lllj_emote`；不需要 `-nod3dm`。游戏实际走 `D3DAdaptor`（krkr-ns 的 CPU 读回实现）。
+- [x] 方法核对：`play/playTimeline/getMainTimelineLabelList/setVariable/setDrawAffineTranslateMatrix/serialize/progress/skipToSync` 均已实现。
+      `initPhysics`、`setTimelineBlendRatio`、wind 等只在 E-mote 角色文件（`_storageType=="emote"`，带 metadata 的 PSB）分支调用，本作没有这类资源，krkr-ns 中仍是空实现。
+- [x] 资源：43 个 `.mtn` 全是明文 PSB v4，脚本不调用 `setEmotePSBDecryptSeed`。
+- [x] 修正 krkr-ns：`loopTime` 是循环起点（SD 先播开场再循环）；变量切换参数化节点时子动画从头播放、参数化主动画时钟不钳制（eyecatch）；
+      补上粒子发射器（eyecatch 角色卡与泡泡、SD002/007/101/501），语义参照 [krkr2 motionplayer](https://github.com/2468785842/krkr2/tree/main/cpp/plugins/motionplayer) 的逆向实现。
+- [x] 视觉验证：eyecatch 与游戏自带静止画 `image/アイキャッチキャラ.png` 一致（角色、恵凪卡片按 `ch` 选中）；9 种标题背景 GL 与 CPU 两种后端逐像素一致
+      （差异 ≤161 px，均为边缘）；全部 40 个场景的缩略总览人工检查无缺图。与 Wine 原版的逐帧对照并入批次 8（原版在 Wine 下能运行，
+      但 Wayland 下截不到 GL 画面，也无法脚本化跳到指定场景）。
 
 验收：标题 9 种背景（`title_bg0..7`、`title_bg_trial`，需全通存档解锁）、两个 Logo、eyecatch、全部 SD 场景播放正确；E-mote 场景 60fps。
+
+### 批次 2 验收记录（2026-11-02）
+
+- 全覆盖场景：`tools/scenarios.py --only emote`（`artifacts/batch2-emote/`，GL 强制版 `artifacts/batch2-emote-gl/`）。
+  两个 Logo、全部 31 个 SD 文件、9 种标题背景、eyecatch 都在播放（截图有变化），43 个 `.mtn` 全部加载，日志无异常，无 `source unsupported`。
+- 完整 smoke：`artifacts/batch2-smoke/`，只剩批次 4 的 DSP 异常。
+- 帧率：`tools/benchmark.py --emote [--desktop]`，1080p，dummy 音频，`artifacts/batch2-measure-{desktop,xvfb}/`。
+
+| 环境/后端 | 场景 | Swap/s | 最长间隔(ms) |
+|---|---|---:|---:|
+| 桌面 AMD 880M（120Hz）/ GL | SD105（最重） | 119.9 | 17.8 |
+| 桌面 / GL | SD001 | 119.9 | 16.0 |
+| 桌面 / GL | 标题开场 | 119.8 | 14.5 |
+| 桌面 / GL | eyecatch（叠在场景上） | 70.7 | 38.5 |
+| Xvfb llvmpipe / CPU | SD105 | 98.9 | 26.2 |
+| Xvfb llvmpipe / CPU | eyecatch | 20.2 | 109.9 |
+
+E-mote 场景在桌面上平均都达到 60fps。剩余问题留给批次 7：eyecatch 每帧要读回 1080p 目标（约 5ms）再做 RGBA→BGRA 转换，且首次出现时上传贴图，最长间隔仍超过 25ms；
+纯 CPU（无 GPU）机器上 eyecatch 只有约 20fps（几十个全屏网格的光栅化）。
 
 ---
 
@@ -179,7 +199,7 @@ Xvfb 总耗时 **18.65s → 12.78s**，最长呈现间隔 **652.9ms → 163.6ms*
       看 krkrz 的 GL 合成器（`doc/GLCompositor.md`、`-drawdevice=ogl`）能否把最终合成搬到 GPU。
 - [ ] 帧节拍：VSync、`-contfreq`、`waitVSync`，避免双重限速导致的抖动；Wayland/X11 都测。
 - [ ] 图片加载：异步加载/预读（krkrz 有 ImageCache、prefetch），解决进场景时的卡顿；去掉批次 1 发现的 auto path 重建。
-- [ ] E-mote 走 GPU、视频 YUV 在 GPU 转换（批次 2/3 完成后再测一遍）。
+- [ ] E-mote 已走 GPU 光栅化（批次 2）；剩读回/转换（可改 PBO 异步或直接合成到 Layer 纹理）和首次贴图上传卡顿。视频 YUV 在 GPU 转换（批次 3 后再测）。
 - [ ] 发布构建：Release + LTO；考虑 steamdev `deckbuild` 容器（glibc 2.31）构建以便在别的机器上跑。
 
 验收：把各场景的 fps/最长帧表格写进本文件，全部达标。
@@ -190,6 +210,7 @@ Xvfb 总耗时 **18.65s → 12.78s**，最长呈现间隔 **652.9ms → 163.6ms*
 
 - [ ] 用全 CG 存档（`<游戏目录>/补丁/` 里有）验证鉴赏模式全部内容；各角色线用 skip（已读跳过）各跑一遍到 ED。
 - [ ] Wine 版与本移植逐项截图对比（标题、UI 各页、典型剧情画面、视频、SD）。
+      E-mote 重点：SD 的开场→循环段（`loopTime` 语义）、eyecatch 泡泡和角色卡（粒子发射数量/速度）、遮罩与混合模式。
 - [ ] 交付：`<游戏目录>/linux/` 下放可执行文件 + 启动脚本 + `.desktop` + 图标（或保留 `~/lllj-krkrz/game/` 方式）；README 写清安装/构建。
 - [ ] 清理：删除 `game/` 以外的测试残留、关闭调试日志级别、`run.sh` 去掉开发用参数。
 
