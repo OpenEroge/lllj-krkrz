@@ -1,7 +1,5 @@
 # build output (./build.sh)
 /build/
-# old krkrz_dev checkout from before the engine fork; not used any more
-/krkrz_dev/
 # reference sources (re-cloneable, read-only)
 /ref/
 # run directory: symlinks into the game's result/ + generated archives (games/lllj/setup.sh)
