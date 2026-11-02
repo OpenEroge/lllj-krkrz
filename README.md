@@ -154,6 +154,9 @@ mosaic/turn 及 extNagano 六种转场（`tools/emote_test.ks` 标签）。
 `-lllj_paths=yes` 输出路径操作、调用栈及扫描事件；`-lllj_index=no` 仅用于以同一构建复现原有全量重建成本。
 运行期资源列表变化后用 `Storages.clearStorageCaches()` 显式刷新。基线及验收结果见 `PLAN.md` 批次 1。
 
+绘制线程：`-drawthread=N` 指定线程池大小（默认按允许运行的物理核数）；`-drawthreadchunk=N` 指定每份最少 `factor×N` 像素（默认 10000，0 = 引擎原行为，即超过阈值就切给所有线程）。
+启动日志 `(lllj) renderer:` 一行会给出实际的 `drawpool` 和 `drawchunk`。
+
 ## 现状
 
 能用：启动 → ATTENTION → 标题菜单 → はじめから → 序章；背景、事件 CG（pimg 差分）、立绘、头像窗、对话框文字、名字栏、

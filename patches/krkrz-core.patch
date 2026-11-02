@@ -463,6 +463,234 @@ index 3208b43..b9081d2 100644
  	void ReschedulePendingLabelEvent(tjs_int tick);
  
  protected:
+diff --git a/common/tjs2/tjsInterCodeExec.cpp b/common/tjs2/tjsInterCodeExec.cpp
+index ca80723..b6c2928 100644
+--- a/common/tjs2/tjsInterCodeExec.cpp
++++ b/common/tjs2/tjsInterCodeExec.cpp
+@@ -772,6 +772,28 @@ void TJSVariantArrayStackCompactNow()
+ //---------------------------------------------------------------------------
+ // tTJSInterCodeContext ( class definitions are in tjsInterCodeGen.h )
+ //---------------------------------------------------------------------------
++void tTJSInterCodeContext::UpdateDebuggerScopeKey(tjs_int start_ip)
++{
++	const tjs_char *classname = GetClassNameRaw();
++	const tjs_char *funcname = GetName();
++	const tjs_char *filename = Block->GetName();
++	if( TVPDebuggerWantsHook() ) {
++		// 接続中は従来どおり毎回計算 (名前が解放・再確保されてもアドレス一致で誤ヒットしない)
++		TJSDebuggerGetScopeKey( DebuggerScopeKey, classname, funcname, filename, start_ip );
++		DebuggerScopeKeyCacheIP = -1;
++		return;
++	}
++	if( start_ip != DebuggerScopeKeyCacheIP || classname != DebuggerScopeKeyCacheClass ||
++		funcname != DebuggerScopeKeyCacheFunc || filename != DebuggerScopeKeyCacheFile ) {
++		TJSDebuggerGetScopeKey( DebuggerScopeKeyCache, classname, funcname, filename, start_ip );
++		DebuggerScopeKeyCacheIP = start_ip;
++		DebuggerScopeKeyCacheClass = classname;
++		DebuggerScopeKeyCacheFunc = funcname;
++		DebuggerScopeKeyCacheFile = filename;
++	}
++	DebuggerScopeKey = DebuggerScopeKeyCache;
++}
++//---------------------------------------------------------------------------
+ void tTJSInterCodeContext::ExecuteAsFunction(iTJSDispatch2 *objthis,
+ 	tTJSVariant **args, tjs_int numargs, tTJSVariant *result, tjs_int start_ip)
+ {
+@@ -886,7 +908,7 @@ void tTJSInterCodeContext::ExecuteAsFunction(iTJSDispatch2 *objthis,
+ 			}
+ 			oldkey = DebuggerScopeKey;
+ 			oldra = DebuggerRegisterArea;
+-			TJSDebuggerGetScopeKey( DebuggerScopeKey, GetClassName().c_str(), GetName(), Block->GetName(), start_ip );
++			UpdateDebuggerScopeKey( start_ip );
+ 			DebuggerRegisterArea = ra;
+ 			// execute
+ 			ExecuteCode(ra, start_ip, args, numargs, result);
+diff --git a/common/tjs2/tjsInterCodeGen.cpp b/common/tjs2/tjsInterCodeGen.cpp
+index cd8dc31..f8648bc 100644
+--- a/common/tjs2/tjsInterCodeGen.cpp
++++ b/common/tjs2/tjsInterCodeGen.cpp
+@@ -516,6 +516,17 @@ ttstr tTJSInterCodeContext::GetShortDescriptionWithClassName() const
+ 	return ret;
+ }
+ //---------------------------------------------------------------------------
++const tjs_char* tTJSInterCodeContext::GetClassNameRaw() const
++{
++	// GetClassName() と同じ規則で親コンテキストの名前を返す (ttstr を作らない版)
++	const tTJSInterCodeContext *parent;
++	if(ContextType == ctPropertySetter || ContextType == ctPropertyGetter)
++		parent = Parent ? Parent->Parent : NULL;
++	else
++		parent = Parent;
++	return parent ? parent->Name : NULL;
++}
++//---------------------------------------------------------------------------
+ ttstr tTJSInterCodeContext::GetClassName() const
+ {
+ 	ttstr ret;
+diff --git a/common/tjs2/tjsInterCodeGen.h b/common/tjs2/tjsInterCodeGen.h
+index c7d10b2..26d102e 100644
+--- a/common/tjs2/tjsInterCodeGen.h
++++ b/common/tjs2/tjsInterCodeGen.h
+@@ -349,6 +349,18 @@ private:
+ 	ScopeKey		DebuggerScopeKey;		//!< for exec
+ 	tTJSVariant*	DebuggerRegisterArea;	//!< for exec
+ 
++	// ExecuteAsFunction ごとの ScopeKey 計算 (名前 3 つの文字列化 + map 検索) は
++	// 呼び出しのたびに走り、デバッガ未接続でも TJS 実行時間の 1 割強を占めていた。
++	// 入力 (start_ip と 3 つの名前ポインタ) が前回と同じなら前回の結果を使う。
++	// デバッガ接続中は従来どおり毎回計算する。
++	ScopeKey		DebuggerScopeKeyCache;
++	tjs_int			DebuggerScopeKeyCacheIP = -1;
++	const tjs_char*	DebuggerScopeKeyCacheClass = nullptr;
++	const tjs_char*	DebuggerScopeKeyCacheFunc = nullptr;
++	const tjs_char*	DebuggerScopeKeyCacheFile = nullptr;
++	void UpdateDebuggerScopeKey(tjs_int start_ip);
++	const tjs_char* GetClassNameRaw() const;
++
+ public:
+ 	tTJSContextType GetContextType() const { return ContextType; }
+ 	const tjs_char *GetContextTypeName() const;
+diff --git a/common/utils/ThreadIntf.cpp b/common/utils/ThreadIntf.cpp
+index ffd062a..62bfaaa 100644
+--- a/common/utils/ThreadIntf.cpp
++++ b/common/utils/ThreadIntf.cpp
+@@ -18,6 +18,13 @@
+ #include <assert.h>
+ #include <system_error>
+ #include <chrono>
++#if defined(__linux__) && !defined(__ANDROID__)
++#include <sched.h>
++#include <cstdio>
++#include <cstring>
++#include <set>
++#include <string>
++#endif
+ 
+ //---------------------------------------------------------------------------
+ // DrawThreadPool 利用統計 (KRKRZ_DRAW_STATS で ON)
+@@ -480,15 +487,67 @@ tTVPThread::GetHandle() const {
+ 
+ //---------------------------------------------------------------------------
+ tjs_int TVPDrawThreadNum = 1;
++tjs_int TVPDrawThreadChunkScale = KRKRZ_THREAD_CHUNK_SCALE;
+ //---------------------------------------------------------------------------
+ extern tjs_int TVPGetProcessorNum( void );
+ 
++//---------------------------------------------------------------------------
++#if defined(__linux__) && !defined(__ANDROID__)
++// 実行を許可された CPU のうち物理コアの数 (SMT の兄弟は 1 つと数える)。
++// sysfs の core_cpus_list (旧カーネルは thread_siblings_list) を兄弟集合のキーにする。
++// affinity / sysfs が読めない CPU が 1 つでもあれば 0 を返し、呼び出し側は論理数に戻す。
++static tjs_int TVPCountAllowedPhysicalCores()
++{
++	cpu_set_t allowed;
++	CPU_ZERO( &allowed );
++	if( sched_getaffinity( 0, sizeof( allowed ), &allowed ) != 0 ) return 0;
++	std::set<std::string> cores;
++	for( int cpu = 0; cpu < CPU_SETSIZE; cpu++ ) {
++		if( !CPU_ISSET( cpu, &allowed ) ) continue;
++		static const char *const files[] = { "core_cpus_list", "thread_siblings_list" };
++		std::string key;
++		for( const char *file : files ) {
++			char path[128];
++			std::snprintf( path, sizeof( path ), "/sys/devices/system/cpu/cpu%d/topology/%s", cpu, file );
++			FILE *fp = std::fopen( path, "r" );
++			if( !fp ) continue;
++			char buf[256];
++			if( std::fgets( buf, sizeof( buf ), fp ) ) {
++				buf[ std::strcspn( buf, "\r\n" ) ] = '\0';
++				key = buf;
++			}
++			std::fclose( fp );
++			if( !key.empty() ) break;
++		}
++		if( key.empty() ) return 0;
++		cores.insert( key );
++	}
++	return (tjs_int)cores.size();
++}
++#endif
++//---------------------------------------------------------------------------
++// -drawthread 未指定 (auto) 時のプールサイズ。
++// 論理コア数 (SMT 込み) だと同じ物理コアの兄弟スレッドに描画を分けてしまい、
++// 合成は速くならず CPU 時間だけが増えるため、取得できれば物理コア数を使う。
++static tjs_int TVPGetAutoThreadNum()
++{
++	static const tjs_int num = []() -> tjs_int {
++		tjs_int logical = TVPGetProcessorNum();
++		if( logical < 1 ) logical = 1;
++#if defined(__linux__) && !defined(__ANDROID__)
++		tjs_int physical = TVPCountAllowedPhysicalCores();
++		if( physical >= 1 && physical <= logical ) return physical;
++#endif
++		return logical;
++	}();
++	return num;
++}
+ //---------------------------------------------------------------------------
+ tjs_int TVPGetThreadNum( void )
+ {
+-	tjs_int threadNum = TVPDrawThreadNum ? TVPDrawThreadNum : TVPGetProcessorNum();
++	tjs_int threadNum = TVPDrawThreadNum > 0 ? TVPDrawThreadNum : TVPGetAutoThreadNum();
+ 	threadNum = std::min( threadNum, TVPMaxThreadNum );
+-	return threadNum;
++	return std::max<tjs_int>( threadNum, 1 );
+ }
+ //---------------------------------------------------------------------------
+ static void TJS_USERENTRY DummyThreadTask( void * ) {}
+diff --git a/common/utils/ThreadIntf.h b/common/utils/ThreadIntf.h
+index 7f94f88..42f11d1 100644
+--- a/common/utils/ThreadIntf.h
++++ b/common/utils/ThreadIntf.h
+@@ -152,6 +152,18 @@ public:
+ #define KRKRZ_THREAD_PIXEL_SCALE 100
+ #endif
+ 
++// 分散時の 1 task あたり最小 pixel 数の乗数 (LLLJ)。
++// 閾値を超えた描画を "全スレッド" ではなく "pixelNum / (factor * CHUNK)" 本
++// (1..TVPGetThreadNum() に clamp) に分割する。整屏 alpha blend を 20 本に細切れにすると
++// 1 本あたりのスループットが落ち、合成速度はほぼ同じまま CPU 時間が数倍になったため
++// (Ryzen 10C/20T、1080p、skip 中に計測)。起動オプション -drawthreadchunk=N で上書き、
++// 0 で旧挙動 (閾値超えなら全スレッド)。
++#ifndef KRKRZ_THREAD_CHUNK_SCALE
++#define KRKRZ_THREAD_CHUNK_SCALE 10000
++#endif
++extern tjs_int TVPDrawThreadNum;
++extern tjs_int TVPDrawThreadChunkScale;
++
+ /*[*/
+ const tjs_int TVPMaxThreadNum = 64;
+ typedef void (TJS_USERENTRY *TVP_THREAD_TASK_FUNC)(void *);
+diff --git a/common/visual/LayerBitmapIntf.cpp b/common/visual/LayerBitmapIntf.cpp
+index 022d17e..108661a 100644
+--- a/common/visual/LayerBitmapIntf.cpp
++++ b/common/visual/LayerBitmapIntf.cpp
+@@ -80,12 +80,20 @@ static float sBmFactor[] =
+ //---------------------------------------------------------------------------
+ static tjs_int GetAdaptiveThreadNum(tjs_int pixelNum, float factor)
+ {
+-  // 閾値乗数は CMake -DKRKRZ_THREAD_PIXEL_SCALE=N (デフォルト 500) で調整可能。
+-  // ThreadIntf.h で fallback 定義あり。
+-  if (pixelNum >= factor * KRKRZ_THREAD_PIXEL_SCALE)
+-    return TVPGetThreadNum();
+-  else
++  // 閾値乗数は CMake -DKRKRZ_THREAD_PIXEL_SCALE=N (デフォルト 100) で調整可能。
++  // 分割数の上限は 1 task あたり factor * TVPDrawThreadChunkScale pixel (ThreadIntf.h)。
++  if (!(pixelNum >= factor * KRKRZ_THREAD_PIXEL_SCALE))
+     return 1;
++  const tjs_int maxNum = TVPGetThreadNum();
++  // 閾値を超えたら面積に応じて分割数を決める (1 task >= factor * chunk pixel)。
++  // chunk <= 0 は旧挙動 (全スレッド)。double で計算して大きな値でも溢れないようにする。
++  const double chunk = (double)factor * (double)TVPDrawThreadChunkScale;
++  if (!(chunk > 0.0))
++    return maxNum;
++  const double num = (double)pixelNum / chunk;
++  if (num >= (double)maxNum)
++    return maxNum;
++  return num >= 2.0 ? (tjs_int)num : 1;
+ }
+ //---------------------------------------------------------------------------
+ #define RET_VOID
 diff --git a/common/visual/MoviePlayer.h b/common/visual/MoviePlayer.h
 index 481b1c7..851194b 100644
 --- a/common/visual/MoviePlayer.h
@@ -517,6 +745,30 @@ index 99a38f6..bc237ba 100644
    // MPEG-1 (.mpg/.mpeg) は pl_mpeg 内蔵プレイヤへ。pl_mpeg は全データを要するので
    // ストリームを丸読みする。所有権契約 (成功時のみ callee が stream を release、
    // 失敗時は呼び出し側が release) を守るため、読み込みでは release せず、player 生成が
+diff --git a/generic/base/SysInitImpl.cpp b/generic/base/SysInitImpl.cpp
+index 4d025b0..fefa7c0 100644
+--- a/generic/base/SysInitImpl.cpp
++++ b/generic/base/SysInitImpl.cpp
+@@ -457,6 +457,19 @@ void TVPAfterSystemInit()
+         }
+         TVPDrawThreadNum = drawThreadNum;
+ 
++        // 分散描画の 1 task あたり最小 pixel 乗数 (ThreadIntf.h の KRKRZ_THREAD_CHUNK_SCALE)。
++        // 0 で旧挙動 (閾値を超えたら全スレッド)。負値や数値でない指定は既定値のまま。
++        if (TVPGetCommandLine(TJS_W("-drawthreadchunk"), &opt)) {
++          ttstr str(opt);
++          bool numeric = !str.IsEmpty() && str.GetLen() <= 9; // tjs_int に収まる桁数
++          for (const tjs_char *p = str.c_str(); numeric && *p; ++p)
++            numeric = (*p >= TJS_W('0') && *p <= TJS_W('9'));
++          if (numeric)
++            TVPDrawThreadChunkScale = (tjs_int)opt;
++          else
++            TVPAddLog(TJS_W("(warning) ignoring invalid -drawthreadchunk=") + str);
++        }
++
+         // DrawStats log output (KRKRZ_DRAW_STATS=ON ビルド時のみ意味あり)。
+         // TJS の System.setDrawStatsLog(true) と同じものを起動オプションで
+         // 切り替えるためのフック。Android のように TJS hook を仕込みづらい
 diff --git a/generic/environ/Application.cpp b/generic/environ/Application.cpp
 index 5d2a42f..b53545e 100644
 --- a/generic/environ/Application.cpp
@@ -762,7 +1014,7 @@ index 6fc5501..f9918a0 100644
  	if (SDL_GetPathInfo(file_path_utf8.c_str(), &pathInfo) && pathInfo.type == SDL_PATHTYPE_FILE) {
  		return static_cast<tjs_uint64>(pathInfo.size);
 diff --git a/sdl3/visual/SDLOGLDrawDevice.cpp b/sdl3/visual/SDLOGLDrawDevice.cpp
-index 38f717a..6d6a6fe 100644
+index 38f717a..f3ec2a1 100644
 --- a/sdl3/visual/SDLOGLDrawDevice.cpp
 +++ b/sdl3/visual/SDLOGLDrawDevice.cpp
 @@ -27,6 +27,11 @@
@@ -777,7 +1029,7 @@ index 38f717a..6d6a6fe 100644
  
  #ifdef KRKRZ_HAS_ELEMENTS
  #include "elements/ElementsDialogManager.h"
-@@ -71,8 +76,25 @@ tTVPSDLOGLDrawDevice::~tTVPSDLOGLDrawDevice()
+@@ -71,8 +76,27 @@ tTVPSDLOGLDrawDevice::~tTVPSDLOGLDrawDevice()
  void TJS_INTF_METHOD tTVPSDLOGLDrawDevice::Show()
  {
  	if (!GLContext) return;
@@ -797,13 +1049,15 @@ index 38f717a..6d6a6fe 100644
 +		};
 +		TVPAddImportantLog(ttstr(TJS_W("(lllj) renderer: vendor=")) + glString(GL_VENDOR) +
 +			TJS_W("; renderer=") + glString(GL_RENDERER) + TJS_W("; version=") + glString(GL_VERSION) +
-+			TJS_W("; drawthreads=") + ttstr(TVPDrawThreadNum));
++			TJS_W("; drawthreads=") + ttstr(TVPDrawThreadNum) +
++			TJS_W("; drawpool=") + ttstr(TVPGetThreadNum()) +
++			TJS_W("; drawchunk=") + ttstr(TVPDrawThreadChunkScale));
 +	}
 +#endif
  	InitPosition();
  
  	if (ShowVideo()) {
-@@ -124,10 +146,32 @@ void TJS_INTF_METHOD tTVPSDLOGLDrawDevice::Show()
+@@ -124,10 +148,32 @@ void TJS_INTF_METHOD tTVPSDLOGLDrawDevice::Show()
  	}
  #endif // KRKRZ_USE_REPL
  
@@ -837,7 +1091,7 @@ index 38f717a..6d6a6fe 100644
  void tTVPSDLOGLDrawDevice::DestroyTexture()
  {
  	// invalidate Texture object
-@@ -490,6 +534,14 @@ TJS_END_NATIVE_CONSTRUCTOR_DECL(/*TJS class name*/SDLOGLDrawDevice)
+@@ -490,6 +536,14 @@ TJS_END_NATIVE_CONSTRUCTOR_DECL(/*TJS class name*/SDLOGLDrawDevice)
  //----------------------------------------------------------------------
  // properties
  //----------------------------------------------------------------------

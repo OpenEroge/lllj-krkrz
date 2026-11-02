@@ -23,7 +23,7 @@
 | 解包数据（只读，别改） | `<游戏目录>/result/`；`game/` 里全是指向它的 symlink |
 | 引擎 | `krkrz_dev/`（master + 递归子模块），构建产物 `krkrz_dev/build/x64-linux/core/Release/krkrz` |
 | 我们的代码 | `plugins/lllj_compat/`、`tools/` 和两份引擎补丁 |
-| 本地改动 | `patches/krkrz_dev-umbrella.patch`（`KRKRZ_LLLJ` 选项/宏）、`patches/krkrz-core.patch`（文件查找、索引、SDLOGL 计时/重绘、音频标签调度锁） |
+| 本地改动 | `patches/krkrz_dev-umbrella.patch`（`KRKRZ_LLLJ` 选项/宏）、`patches/krkrz-core.patch`（文件查找、索引、SDLOGL 计时/重绘、音频标签调度锁、绘制线程分片、TJS 作用域缓存） |
 | 脚本查阅 | `decomp/data|patch/**/*.dis`（字节码反汇编）、`decomp/text/`（解密后的 .ks/.tjs/.toml 文本） |
 | 参考实现 | `ref/krkr-ns`（MIT，最重要：emoteplayer/视频/layerexdraw 都在 `krkrsdl2/src/plugins` 和 `core/visual/sdl2`）、`ref/msgtool_tjs_ns0.rs`（GPL，只当格式说明） |
 | 上次 krkrsdl2 尝试的计划 | `~/.claude/plans/https-github-com-krkrsdl2-krkrsdl2-linu-functional-flamingo.md`（插件矩阵、汉化包分析，可参考） |
@@ -136,6 +136,16 @@ python3 -I tools/verify_windows_saves.py artifacts/win-01
     已改为调度字段专用的末端锁 `ScheduleMutex`（锁顺序：列表锁 → 缓冲区锁 → `ScheduleMutex`，见 `SoundEventThread.h`）。
     回归：`python3 tools/audio_lock_stress.py OUT 60`（修复前约 15 秒内会卡；需要更快复现时，可临时在事件线程持列表锁处加 sleep 放大时序）。
     再卡住时不要关游戏，运行 `tools/grab_hang.sh OUT` 抓全部线程栈。
+20. **快进 CPU（上游）**：120Hz 桌面快进时游戏占约 1.8 核。两处原因：
+    - 绘制线程池按逻辑核数（20）建，超过阈值的混合一律切成 20 条（`KRKRZ_THREAD_PIXEL_SCALE` 实际默认 100，不是注释写的 500）。
+      整屏混合被切碎后每条吞吐只剩约 1/3，合成几乎不变快，CPU 却翻了几倍。
+    - TJS 每次函数调用都无条件计算调试器 ScopeKey（三次字符串构造 + map 查找），约占主线程的 15%。
+    已改为：
+    - 池大小取允许运行的物理核数（Linux sysfs，读不到时退回逻辑核数）。
+    - 每次分发按面积分配份数，每份至少 `factor × -drawthreadchunk`（默认 10000，0 = 旧行为）。
+    - ScopeKey 按 start_ip 和名字指针缓存；挂调试器时照旧每次计算。
+    桌面快进 CPU 从约 171–183% 降到 91–93%，快进速度 23.4→26.4 句/s；不同分片设置下渲染输出逐字节一致。
+    测量脚本见 `tools/perf/README.md`（perf 在本环境不可用，改用 schedstat + gdb 抽样）。
 
 ## 6. 当前已知问题（详见 PLAN.md 对应批次）
 

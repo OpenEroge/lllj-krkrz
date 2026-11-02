@@ -13,3 +13,5 @@ __pycache__/
 /artifacts/
 # prebuilt FFmpeg (tools/fetch_ffmpeg.sh)
 /third_party/
+# scratch notes / local experiment output
+/tmp/
