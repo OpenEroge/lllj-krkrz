@@ -104,7 +104,7 @@ class Session:
         stats = self.obj("LLLJNative.frameStats()")
         self.steps.append({"name": "startup_logos", "state": self.obj("llljTestState()"),
                            "stats": stats, "screenshot_size": self.capture("00_startup_finished"),
-                           "note": "Normal caution/Logo traversal; E-mote logo visuals remain batch 2."})
+                           "note": "Normal caution/Logo traversal."})
         self.write_report()
 
     def jump(self, storage, label, mode=None):
@@ -157,10 +157,7 @@ def check_log(path):
     for i, match in enumerate(matches):
         site = match.groups()
         block = text[match.end():matches[i + 1].start() if i + 1 < len(matches) else len(text)]
-        motion = re.search(r'%-3=\(string\)"([^"\n]+\.mtn)"', block)
-        if site in (("affinesourceimage.tjs", "loadImages", "1663"), ("kaglayer.tjs", "loadImages", "15")) and motion:
-            known.append({"site": list(site), "storage": motion[1], "reason": "batch 2: missing motion player"})
-        elif site == ("voiceeffect.tjs", "Verb", "6") and '(string)"WaveSoundBuffer"' in block and '(string)"StkFreeVerb"' in block:
+        if site == ("voiceeffect.tjs", "Verb", "6") and '(string)"WaveSoundBuffer"' in block and '(string)"StkFreeVerb"' in block:
             known.append({"site": list(site), "reason": "batch 4: missing DSP"})
         else:
             unknown.append(site)
@@ -248,8 +245,6 @@ def gallery(session):
                 session.ev(f'Current.func("onSelect")({index})')
                 session.jump("cgmode.ks", "*view", "cgmode")
                 session.step(f"07_{label}")
-                if label == "sd_gallery":
-                    session.steps[-1]["visual_status"] = "E-mote rendering blocked by batch 2; navigation is tested"
                 session.jump("cgmode.ks", "*view_rclick", "cgmode")
                 session.wait('Current.hasDefined("items")')
             assert session.ev('typeof global.SoundModeInstance') == '"Object"'
@@ -306,17 +301,59 @@ def controls(session):
     session.step("13_keyboard_advance")
 
 
+def frames_differ(session, prefix, count, interval):
+    """Capture count frames; return how many distinct images were seen."""
+    import hashlib
+    digests = set()
+    for k in range(count):
+        time.sleep(interval)
+        session.capture(f"{prefix}_{k:02d}")
+        digests.add(hashlib.sha256((session.out / f"{prefix}_{k:02d}.png").read_bytes()).hexdigest())
+    return len(digests)
+
+
+def emote(session):
+    """E-mote (batch 2): logos, title background, SD scenes and the eyecatch."""
+    session.boot()
+    session.click(720, 400)  # leave caution; logos are E-mote motions
+    logos = frames_differ(session, "08_logo", 8, 0.5)
+    session.wait('SystemHook.currentState == "title" && kag.inStable', 90)
+    session.step("08_title")
+    session.steps[-1]["distinct_logo_frames"] = logos
+    assert logos >= 4, f"Logo motions look static ({logos} distinct frames)"
+    assert session.ev("typeof global.Motion") == '"Object"'
+    session.jump("title.ks", "*game", "game")
+    session.wait('typeof world_object.player == "Object" && world_object.player.curPoint > 0', 60)
+    session.ev(f"Storages.addAutoPath({json.dumps(str(ROOT / 'tools') + '/')})")
+    for name in ("sd001a01", "sd105a_ea03_r02", "sd601_ra01"):
+        session.ev(f"tf.llljEv={json.dumps(name)}")
+        session.ev('kag.process("emote_test.ks","*ev")')
+        distinct = frames_differ(session, f"08_{name}", 6, 0.4)
+        session.step(f"08_{name}_stats")
+        session.steps[-1]["distinct_frames"] = distinct
+        assert distinct >= 2, f"{name} looks static"
+    session.ev('kag.process("emote_test.ks","*eyecatch")')
+    distinct = frames_differ(session, "08_eyecatch", 10, 0.25)
+    session.steps.append({"name": "08_eyecatch", "distinct_frames": distinct,
+                          "note": "Band characters must be on the stairs once state=1 (compare image/アイキャッチキャラ.png)."})
+    assert distinct >= 4, "eyecatch looks static"
+    session.write_report()
+    return check_log(session.out / "game.log")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("out", type=Path)
     parser.add_argument("lines", nargs="?", type=int, default=6)
     parser.add_argument("--sample-seconds", type=float, default=1)
-    parser.add_argument("--only", choices=("all", "gallery", "settings", "controls"), default="all")
+    parser.add_argument("--only", choices=("all", "gallery", "settings", "controls", "emote"), default="all")
     args = parser.parse_args()
     session = Session(args.out, gallery_seed=True)
     try:
         if args.only == "all":
             known = smoke(session, args.lines, args.sample_seconds)
+        elif args.only == "emote":
+            known = emote(session)
         else:
             session.boot()
             session.finish_startup()

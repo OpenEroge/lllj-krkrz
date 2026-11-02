@@ -24,7 +24,7 @@ done
 # placeholder files so the game's CanLoadPlugin() finds the DLLs we emulate
 for pd in plugin plugin64; do
 	mkdir -p "$GAME/$pd"
-	for d in PackinOne KAGParserEx wuvorbis wuopus win32dialog AlphaMovie fstat; do
+	for d in PackinOne KAGParserEx wuvorbis wuopus win32dialog AlphaMovie fstat motionplayer_nod3d; do
 		: > "$GAME/$pd/$d.dll"
 	done
 done

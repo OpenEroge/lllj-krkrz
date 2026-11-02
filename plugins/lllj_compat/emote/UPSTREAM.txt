@@ -1,0 +1,45 @@
+E-mote runtime vendored from KRKR-ns (MIT; see UPSTREAM-LICENSE.txt, which
+also carries the krkrsdl3 terms the code derives from).
+
+  source:  https://github.com/DrFlyingPig/krkr-ns
+           krkrsdl2/src/plugins/emoteplayer/
+  commit:  949faf9a874f54b149a3fe5382cfccb38afb99bb (2026-10-16)
+  omitted: EmoteGLRenderBackend.{h,cpp} (private-context GL backend; batch 7
+           decides whether a GPU path is worth it), Platform.h (replaced)
+
+Build glue (no upstream equivalent)
+  lllj_emote_module.cpp   registers the static plugin "lllj_emote"
+                          (prelude.tjs maps motionplayer_nod3d.dll to it)
+  Platform.h              TVPConsoleLog -> engine log (../src/Platform.h)
+  shim/lllj_emote_prefix.h  force-included; stands in for krkr-ns' PCH
+  shim/lllj_ncbind.h      krkrz_dev ncbind on engine-internal headers, private
+                          class names (see the comments in the file)
+  shim/lllj_stream.h      TVPReadI8LE (krkrz only has 16/32/64-bit readers)
+  shim/SDL.h, KrkrNSProf.h, KrkrNSPaths.h, psbfile/PSBData.h   one-liners
+
+Local changes to upstream files (search for "LLLJ")
+  emoteplayer.cpp, emoteplayerclass.cpp
+      include "lllj_ncbind.h" instead of "ncbind/ncbind.hpp"
+  emotefile.cpp
+      stream helper members (ReadBuffer/SetPosition/ReadI32LE/ReadI8LE) ->
+      krkrz free functions TJS::TVP*(stream, ...); mechanical rewrite
+  EmoteSWRenderBackend.cpp
+      SDL2 renderer-assisted path compiled out unless LLLJ_EMOTE_SDL_RENDERER
+      (krkrz has no SDL_Renderer); every mesh takes the CPU rasterizer
+  TVPCompositor.cpp
+      GL backend selection compiled out unless LLLJ_EMOTE_GL
+  emoterunner.cpp  (behaviour fixes, verified against this title's assets)
+      - loopTime is the re-entry point after lastTime, not the loop length
+        (SD scenes: last=120/loop=60 play the intro once, then loop 60..120;
+        loop=last-1 holds the last frame). loopTime==0 behaves as before.
+      - an embedded motion under a parameterized node restarts from 0 when the
+        variable switches the node's content (eyecatch state 0 -> 1)
+  emoteplayerclass.cpp
+      - a parameterized main motion's clock is not clamped at lastTime (its
+        frame comes from a variable; the clock drives embedded motions)
+      - dropped the "skipToSync TODO" / "stop TODO" log lines: both methods
+        are implemented, the messages were stale
+
+Known upstream gaps (still stubs; not reached by the tested scenes)
+  initPhysics, setTimelineBlendRatio, setColor, setOuterForce, start/stopWind,
+  skip, pass, assign, getVariableFrameList

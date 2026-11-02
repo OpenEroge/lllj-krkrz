@@ -13,5 +13,15 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${LLLJ_DIR}/src/p
 
 file(GLOB LLLJ_SRC CONFIGURE_DEPENDS ${LLLJ_DIR}/src/*.cpp)
 
-set(KRKRZ_SRC_ADD ${KRKRZ_SRC_ADD} ${LLLJ_SRC} PARENT_SCOPE)
-set(KRKRZ_INC ${KRKRZ_INC} ${LLLJ_DIR}/src ${CMAKE_CURRENT_BINARY_DIR} PARENT_SCOPE)
+# E-mote runtime vendored from krkr-ns (see emote/UPSTREAM.txt). emote/shim
+# adapts its SDL2/Switch/ncbind includes; ncbind itself comes from krkrz_dev.
+file(GLOB LLLJ_EMOTE_SRC CONFIGURE_DEPENDS ${LLLJ_DIR}/emote/*.cpp)
+# krkr-ns builds them with a precompiled header; emote/shim/lllj_emote_prefix.h
+# is force-included instead so the sources stay unchanged. They are compiled by
+# the engine target, so the property is set in that directory's scope.
+set_source_files_properties(${LLLJ_EMOTE_SRC} DIRECTORY ${CMAKE_SOURCE_DIR}/src/core
+    PROPERTIES COMPILE_OPTIONS "-include;lllj_emote_prefix.h")
+
+set(KRKRZ_SRC_ADD ${KRKRZ_SRC_ADD} ${LLLJ_SRC} ${LLLJ_EMOTE_SRC} PARENT_SCOPE)
+set(KRKRZ_INC ${KRKRZ_INC} ${LLLJ_DIR}/src ${CMAKE_CURRENT_BINARY_DIR}
+    ${LLLJ_DIR}/emote/shim ${LLLJ_DIR}/emote ${CMAKE_SOURCE_DIR}/src/plugins PARENT_SCOPE)
