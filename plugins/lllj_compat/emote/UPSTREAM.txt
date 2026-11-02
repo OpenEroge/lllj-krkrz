@@ -17,8 +17,9 @@ Build glue (no upstream equivalent)
                           LLLJNative.emoteStats() reads the profiler hooks
   Platform.h              TVPConsoleLog -> engine log (../src/Platform.h)
   shim/lllj_emote_prefix.h  force-included; stands in for krkr-ns' PCH
-  shim/lllj_ncbind.h      krkrz_dev ncbind on engine-internal headers, private
-                          class names (see the comments in the file)
+  ../shim/lllj_ncbind.h   krkrz_dev ncbind on engine-internal headers, private
+                          class names (shared with layerexdraw; the prefix
+                          comes from TVP_PLUGIN_NAME, default lllj_emote)
   shim/lllj_stream.h      TVPReadI8LE (krkrz only has 16/32/64-bit readers)
   shim/KrkrNSProf.h       profiler hooks -> LLLJEmoteProf (emoteStats)
   shim/SDL.h, SDL_opengles2.h, KrkrNSPaths.h, psbfile/PSBData.h   one-liners

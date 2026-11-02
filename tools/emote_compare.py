@@ -46,6 +46,14 @@ def answer_dialogs():
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def read_text(path):
+    """Text of a log written by either side (krkr's console log is UTF-16 with a BOM)."""
+    if not path.exists():
+        return ""
+    raw = path.read_bytes()
+    return raw.decode("utf-16", "replace") if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else raw.decode("utf-8", "replace")
+
+
 def wait_log(path, timeout, poll=None):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -91,8 +99,9 @@ def run_original(out):
         # the game's hook loader fails ("Detour Error") if started meanwhile.
         subprocess.run(["wineboot", "-i"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300)
         subprocess.run(["wineserver", "-w"], env=env, timeout=300)
-        game = subprocess.Popen(["wine", "limelight_lj.exe", "-nod3dm=yes", "-used2d=no"], cwd=mirror, env=env,
-                                stdout=(out / "wine.log").open("w"), stderr=subprocess.STDOUT,
+        # -forcelog=yes asks the engine's LogCore for its console log (krkr.console.log)
+        game = subprocess.Popen(["wine", "limelight_lj.exe", "-nod3dm=yes", "-used2d=no", "-forcelog=yes"],
+                                cwd=mirror, env=env, stdout=(out / "wine.log").open("w"), stderr=subprocess.STDOUT,
                                 start_new_session=True)
         log = wait_log(mirror / "savedata" / "ec_log.txt", 600, answer_dialogs)
     finally:
@@ -105,6 +114,9 @@ def run_original(out):
     dest.mkdir()
     for f in (mirror / "savedata").glob("ec_*"):
         shutil.copy2(f, dest / f.name)
+    console = next((p for p in (mirror / "krkr.console.log", mirror / "savedata" / "krkr.console.log") if p.exists()), None)
+    if console:
+        shutil.copy2(console, out / "original_console.log")
     return log
 
 
@@ -149,16 +161,29 @@ def main():
     sheets = out / "sheets"
     pngs.mkdir()
     sheets.mkdir()
-    results = {}
-    for bmp in sorted((out / "original").glob("ec_*.bmp")):
-        name = bmp.stem[3:]
-        port_bmp = out / "port" / bmp.name
-        if not port_bmp.exists():
+    results, sizes = {}, {}
+    # E-mote captures are .bmp (captureSnapshot), system screens and transitions are .png
+    # (whole-window System.captureScreen); both sides write the same names.
+    for source in sorted((out / "original").glob("ec_*.*")):
+        if source.suffix not in (".bmp", ".png"):
+            continue
+        name = source.stem[3:]
+        port_source = out / "port" / source.name
+        if not port_source.exists():
             results[name] = None
             continue
         a, b = pngs / f"original_{name}.png", pngs / f"port_{name}.png"
-        to_png(bmp, a)
-        to_png(port_bmp, b)
+        for src, dst in ((source, a), (port_source, b)):
+            if src.suffix == ".bmp":
+                to_png(src, dst)
+            else:
+                subprocess.run(["magick", str(src), str(dst)], check=True)
+        sizes[name] = {side: subprocess.run(["magick", "identify", "-format", "%wx%h", str(p)],
+                                            capture_output=True, text=True, check=True).stdout
+                       for side, p in (("original", a), ("port", b))}
+        if sizes[name]["original"] != sizes[name]["port"]:
+            # compare on the original's frame; the report keeps both sizes
+            subprocess.run(["magick", str(b), "-resize", sizes[name]["original"] + "!", str(b)], check=True)
         metric = subprocess.run(["compare", "-metric", "RMSE", str(a), str(b), "null:"],
                                 capture_output=True, text=True).stderr
         results[name] = float(metric.split("(")[1].split(")")[0])
@@ -173,7 +198,18 @@ def main():
         subprocess.run(["magick", "montage", *files, "-resize", "480x270", "-tile", "2x", "-geometry", "+3+3",
                         "-background", "gray30", str(sheets / f"{scene}.png")], check=True)
     missing = [n for n, v in results.items() if v is None]
-    (out / "report.json").write_text(json.dumps({"rmse": results, "missing_in_port": missing}, indent=2))
+    # evidence for the log checks: exception headers, the D3D state and the capture logs
+    original_console = out / "original_console.log"
+    evidence = {
+        "original_console_log": str(original_console) if original_console.exists() else None,
+        "original_exceptions": [l for l in read_text(original_console).splitlines() if "exception occured" in l]
+                               if original_console.exists() else "no console log written",
+        "port_exceptions": [l for l in read_text(out / "port_run" / "game.log").splitlines() if "exception occured" in l],
+        "original_state_lines": [l for l in read_text(out / "original" / "ec_log.txt").splitlines() if "isD3D" in l or "timeout" in l or "error" in l],
+        "port_state_lines": [l for l in read_text(out / "port" / "ec_log.txt").splitlines() if "isD3D" in l or "timeout" in l or "error" in l],
+    }
+    (out / "report.json").write_text(json.dumps({"rmse": results, "sizes": sizes, "missing_in_port": missing,
+                                                 "evidence": evidence}, indent=2, ensure_ascii=False))
     print(json.dumps(results, indent=1))
     if missing:
         sys.exit(f"port did not capture: {missing}")

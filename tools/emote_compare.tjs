@@ -1,9 +1,11 @@
-// E-mote side-by-side capture (batch 2). Runs unchanged in the original game
-// (injected through a CialloHook patch folder under Wine, see
-// tools/emote_compare.py) and in this port (loaded over the REPL), so both
-// capture the same scenes at the same times after the same script steps.
-// Captures go to System.dataPath + "ec_<name>.bmp" through KAG's
-// own captureSnapshot (all layers piled, as for save thumbnails).
+// Side-by-side capture (batch 2 E-mote, batch 5 system screens and transitions). Runs
+// unchanged in the original game (injected through a CialloHook patch folder under Wine,
+// see tools/emote_compare.py) and in this port (loaded over the REPL), so both capture the
+// same scenes at the same times after the same script steps.
+// E-mote items are captured through KAG's captureSnapshot (all layers piled, as for save
+// thumbnails) into System.dataPath + "ec_<name>.bmp". The system screens, transitions and
+// the stripe wipe are whole-window screenshots (System.captureScreen) into "ec_<name>.png",
+// because the UI and the transition effects live outside the KAG layer pile.
 
 class LLLJEmoteCompare
 {
@@ -15,8 +17,9 @@ class LLLJEmoteCompare
 	var lastClick = 0;
 	var dir;
 	var log = [];
+	var times = [];
 
-	// [ev] name, capture times (ms after kag.process)
+	// E-mote: [ev name, capture times (ms after kag.process)]
 	var items = [
 		[ "sd001a01",        [ 300, 900, 1500, 2500, 3500 ] ],
 		[ "sd002_ea01_ta01", [ 300, 900, 1500, 2500, 3500 ] ],
@@ -58,6 +61,25 @@ class LLLJEmoteCompare
 		invalidate layer;
 	}
 
+	// System screens (UI, transitions in progress) are composed from kag.sysbase with
+	// piledCopy, as the game's own screenshot feature does (snapcapture.tjs
+	// Utils.captureScreen); captureSnapshot only holds the scene layers. The original
+	// engine has no System.captureScreen, and both sides must use the same method.
+	function screen(name)
+	{
+		var layer = new Layer(kag, kag.poolLayer);
+		try {
+			var w = kag.sysbase.width, h = kag.sysbase.height;
+			layer.setImageSize(w, h);
+			layer.piledCopy(0, 0, kag.sysbase, 0, 0, w, h);
+			layer.saveLayerImage(dir + name + ".bmp", "bmp");
+			note("screen " + name);
+		} catch (e) {
+			note("screen failed " + name + ": " + e.message);
+		}
+		invalidate layer;
+	}
+
 	function elapsed() { return System.getTickCount() - since; }
 	function next() { phase++; since = System.getTickCount(); }
 
@@ -69,6 +91,16 @@ class LLLJEmoteCompare
 			note("error: " + e.message);
 			timer.enabled = false;
 		}
+	}
+
+	// timed captures of the current item: names are "<name>_<ms>"
+	function timed(name, shots, pick)
+	{
+		if (shot < times.count && elapsed() >= times[shot]) {
+			pick(name + "_" + times[shot]);
+			shot++;
+		}
+		return shot >= times.count;
 	}
 
 	function step()
@@ -93,26 +125,166 @@ class LLLJEmoteCompare
 			note("game");
 			next();
 			break;
-		case 2: // start the next item
-			if (item >= items.count) { note("done"); timer.enabled = false; return; }
+		case 2: // start the next E-mote item
+			if (item >= items.count) { phase = 4; since = System.getTickCount(); note("e-mote items finished"); return; }
 			var name = items[item][0];
 			if (name.charAt(0) == "*") kag.process("emote_test.ks", name);
 			else { tf.llljEv = name; kag.process("emote_test.ks", "*ev"); }
 			note("show " + name);
 			shot = 0;
+			times = items[item][1];
 			next();
 			break;
 		case 3: // timed captures
-			var times = items[item][1];
-			if (shot < times.count && elapsed() >= times[shot]) {
-				var name = items[item][0];
-				if (name.charAt(0) == "*") name = name.substring(1);
-				capture("%s_%d".sprintf(name, times[shot]));
-				shot++;
+			var name = items[item][0];
+			if (name.charAt(0) == "*") name = name.substring(1);
+			if (timed(name, times, function(n) { capture(n); })) { item++; phase = 2; since = System.getTickCount(); }
+			break;
+
+		// --- system screens and transitions, from the title (batch 5) ---
+		case 4: // back to the title screen
+			kag.process("start.ks", "*gameend_title");
+			next();
+			break;
+		case 5:
+			if (SystemHook.currentState != "title" || !kag.inStable) return waitGuard();
+			note("title again");
+			next();
+			break;
+		case 6: // flowchart: layerExDraw lines and minimap
+			try {
+				note("isD3D " + kag.isD3D + " uibase.hasImage " + kag.uibase.hasImage);
+			} catch (e) {
+				note("isD3D unavailable: " + e.message);
 			}
-			if (shot >= times.count) { item++; phase = 2; since = System.getTickCount(); }
+			kag.process("custom.ks", "*flowchart");
+			next();
+			break;
+		case 7:
+			if (SystemHook.currentState != "scnchart") return waitGuard();
+			if (elapsed() < 1500) return;
+			screen("flowchart_1500");
+			next();
+			break;
+		case 8: // leave the flowchart (the exit runs the small player's pile)
+			kag.process("scnchart.ks", "*back");
+			next();
+			break;
+		case 9:
+			if (SystemHook.currentState != "title" || !kag.inStable) return waitGuard();
+			if (elapsed() < 1000) return;
+			note("flowchart left");
+			next();
+			break;
+		case 10: // option Text page: HSV colour wheel and atlas slider digits
+			kag.process("title.ks", "*option");
+			next();
+			break;
+		case 11:
+			if (SystemHook.currentState != "option") return waitGuard();
+			Current.page = 4;
+			kag.process("option.ks", "*page");
+			next();
+			break;
+		case 12:
+			if (Current.propget("page") != 4) return waitGuard();
+			if (elapsed() < 1000) return;
+			screen("optiontext_1000");
+			next();
+			break;
+		case 13: // option gamepad page (index 9)
+			Current.page = 9;
+			kag.process("option.ks", "*page");
+			next();
+			break;
+		case 14:
+			if (Current.propget("page") != 9) return waitGuard();
+			if (elapsed() < 1000) return;
+			screen("optiongamepad_1000");
+			kag.process("option.ks", "*back");
+			next();
+			break;
+		case 15:
+			if (SystemHook.currentState != "title" || !kag.inStable) return waitGuard();
+			kag.process("title.ks", "*game");
+			shot = 0;
+			lastClick = -10000;  // lastClick is relative to since in phase 16
+			next();
+			break;
+		case 16: // in game: advance to the first line with a speaker name box (line 22)
+			if (typeof world_object.player != "Object" || world_object.player.curPoint <= 0) return waitGuard();
+			if (world_object.player.cur < 22 && shot < 60) {
+				if (elapsed() - lastClick < 700 || !kag.inStable) return;
+				kag.onPrimaryClick();
+				lastClick = System.getTickCount() - since;
+				shot++;
+				return;
+			}
+			note("namebox line cursor " + world_object.player.cur);
+			shot = 0;
+			next();
+			break;
+		case 17:
+			if (elapsed() < 1500) return;
+			screen("namebox_1500");
+			next();
+			break;
+		case 18: // mosaic (game's table entry モザイク, 750 ms), whole-window frames
+			kag.process("emote_test.ks", "*trans_mosaic");
+			times = [ 150, 300, 500 ];
+			shot = 0;
+			next();
+			break;
+		case 19:
+			if (timed("mosaic", times, function(n) { screen(n); })) { next(); }
+			break;
+		case 20:
+			if (elapsed() < 1200) return;
+			next();
+			break;
+		case 21: // turn (ターン, 2000 ms)
+			kag.process("emote_test.ks", "*trans_turn");
+			times = [ 150, 300, 500 ];
+			shot = 0;
+			next();
+			break;
+		case 22:
+			if (timed("turn", times, function(n) { screen(n); })) { next(); }
+			break;
+		case 23:
+			if (elapsed() < 2500) return;
+			next();
+			break;
+		case 24: // backlog from the game: the system stripe wipe (layerStwCopy)
+			SystemAction.backlog();
+			next();
+			break;
+		case 25: // the wipe starts when cureff turns on; times are measured from there
+			if (!(typeof kag.sysTransitionEffect == "Object" && kag.sysTransitionEffect.cureff)) return waitGuard();
+			times = [ 50, 120, 200 ];
+			shot = 0;
+			next();
+			break;
+		case 26:
+			if (timed("wipe", times, function(n) { screen(n); })) { next(); }
+			break;
+		case 27:
+			if (SystemHook.currentState != "backlog" || elapsed() < 800) return waitGuard();
+			kag.process("backlog.ks", "*back");
+			next();
+			break;
+		case 28:
+			if (SystemHook.currentState != "game" || elapsed() < 800) return waitGuard();
+			note("done");
+			timer.enabled = false;
 			break;
 		}
+	}
+
+	// give up on a system screen that never shows, so the run ends with its log
+	function waitGuard()
+	{
+		if (elapsed() > 30000) { note("timeout in phase " + phase + " state " + SystemHook.currentState); next(); }
 	}
 }
 global.llljEmoteCompare = new LLLJEmoteCompare();

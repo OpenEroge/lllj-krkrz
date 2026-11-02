@@ -11,7 +11,8 @@
 硬件 GL 下网格在 GPU 光栅化。验收数据见 `PLAN.md` 批次 2。
 批次 3 已实现：OP/ED 视频由 `plugins/lllj_compat/src/FFmpegMoviePlayer.cpp`（预构建 FFmpeg，`tools/fetch_ffmpeg.sh`）播放，验收数据见 `PLAN.md` 批次 3。
 批次 4 已实现：语音特效（带通/延迟/混响，`src/wave_filters.cpp`）与多轨 BGM `.mchx`（`src/multitrack.cpp`），验收数据见 `PLAN.md` 批次 4。
-**后续**：其余插件、汉化和完整 60Hz 优化仍按各自批次处理。
+批次 5 已实现：layerExDraw（流程图、颜色选择器）、layerStwCopy（系统条纹转场）、msdfrender（图集字体）、PackinOne 缺口和手柄，验收数据见 `PLAN.md` 批次 5。
+**后续**：汉化和完整 60Hz 优化仍按各自批次处理。
 
 ## 2. 关键路径
 
@@ -74,6 +75,15 @@ python3 -I tools/verify_windows_saves.py artifacts/win-01
   （系统里有同 soname 但缺 wmv3/wmapro 的 openSUSE 版本，别让它被加载）。`LLLJNative.movieStats()` 给出帧/丢帧/落后/欠载。
   prelude 让 `System.getOSVersion` 报 Windows 10，原版 `SelectMovieFile` 因此选 `op.mp4`。
 
+- **GDI+**（`layerexdraw/`）：krkr-ns 的 layerExDraw 原样 vendor（差异见 `layerexdraw/UPSTREAM.txt`），PlutoVG（`third_party/plutovg/`）光栅化，
+  静态插件 `lllj_layerexdraw`。ncbind 绑定头已移到共用的 `shim/lllj_ncbind.h`：每个模块在强制包含的前缀头里先定义 `TVP_PLUGIN_NAME`，
+  所有 ncbind 名字都以它为前缀（未定义时默认 `lllj_emote`，新模块**必须**定义，否则会和 E-mote 共用注册表）。
+  PathGradient 按 GDI+ 语义重写（中心点到边界的三角扇、重心插值，烘成纹理），krkr-ns 原来只取第一个外圈色。文字绘制没有字体（本作只有已注释掉的 exroll 用到）。
+- **按原 DLL 反汇编实现的小插件**：`src/layer_extras.cpp` 的 `stitchWrappedCopy`（layerStwCopy：每行源行 `(oy+r) mod sh`、起点按 `arr` 逐行偏移、按 `sw` 横向回绕）；
+  `src/msdfrender.cpp`（MSDF 取 RGB 中值、SDF 取 alpha，`cov = 128 + (sd-128)*param`，province 饱和相加）。
+  它们经 prelude 的 TJS 成员类 + `LLLJNative.attachMembers` 挂到 Layer；`layerStwCopy.dll` 需要 `run.sh` 的占位文件（游戏用 `CanLoadPlugin` 检查）。
+- **手柄**：不模拟 gamepad.dll。prelude 在没有显式 `-joypad` 时设 `-joypad=dinput`，游戏因此跳过 `GamepadPort`，改用引擎自带的 SDL 手柄（VK_PAD* 键 → KAG `padKeyMap`）；
+  若同时模拟 GamepadPort，同一按键会经两条路径各触发一次。
 - **音频**（`src/wave_filters.cpp`、`src/multitrack.cpp`）：游戏的 `voiceeffect.tjs` 把 `.ini` 里的每行表达式用 `Scripts.eval(..., VoiceEffectFactory)` 求值，
   得到 `WaveSoundBuffer.WaveDSPFilter/DelayEffect/StkFreeVerb` 实例后放进 `buf.filters`。这几个类在安装阶段原生挂到 `WaveSoundBuffer` 上，
   `wfbasiceffect/wftypicaldsp/wumultitrack.dll` 只需 link 成功（prelude 空壳）。三个类共用一个原生实例类型 `LLLJWaveFilter`，
@@ -118,6 +128,10 @@ python3 -I tools/verify_windows_saves.py artifacts/win-01
     宿主类继续喂静音直到 `extend` 用完，并入队 `tTVPWaveSegment(lastPos, 0, n)`，所以尾音期间 `position` 不可信。
 16. **REPL 里的日文**：`json.dumps` 默认把非 ASCII 转成 `\uXXXX`，TJS 字符串不认，文件名会变成别的东西；传给 REPL 时用 `ensure_ascii=False`。
 
+17. **非 D3D 路径**：本移植（和 Wine 下的原版一样）`kag.isD3D == 0`，`mainwindow.tjs` 因此把 `kag.uibase` 设为无图像的 binder 层。
+    原版脚本在流程图退出时往它上面 `piledCopy`，会抛被捕获的 `Not drawable layer type`（Wine 下原版日志同样有）；prelude 给 `PlayBackViewUtil.pile` 加了父层有图像的判断。
+18. **截图对照**：`kag.captureSnapshot` 只含场景层；系统界面和转场中途要用 `layer.piledCopy(0,0,kag.sysbase,...)`（游戏截图功能的做法）。原版引擎没有 `System.captureScreen`。
+
 ## 6. 当前已知问题（详见 PLAN.md 对应批次）
 
 | 现象 | 归属批次 |
@@ -126,9 +140,9 @@ python3 -I tools/verify_windows_saves.py artifacts/win-01
 | 视频期间桌面最长呈现间隔 26–28ms（>25ms）；真实声卡下的音画同步尚待人工实听 | 批次 7 |
 | 视频字幕（汉化版 `.ass`）未接；接入点是 `FFmpegMoviePlayer.cpp` 的 `Deliver` | 批次 6 |
 | 延迟的 dry/wet 语义（按 STK 习惯交叉淡化）和混响电平尚未与 Wine 原版实听对比；多轨按各轨直接相加，部分素材（`rgb_live`）相加后超过 0dBFS | 批次 4 人工复核 |
-| 鉴赏音乐页频谱（`fftgraph.dll` 的 `drawFFTGraph`）缺失，提示「fftgraph.dllがありません」；引擎有 `getSoundSpectrum` 可用 | 批次 5 |
-| 颜色选择器依赖 layerExDraw；当前显示色样，禁用缺失的轮盘实现 | 批次 5 |
-| layerStwCopy 附加系统转场未实现；当前使用原有规则转场 | 批次 5 |
+| 鉴赏音乐页频谱提示「fftgraph.dllがありません」：原版游戏目录里也没有 fftgraph.dll，行为与原版一致，未实现 | 不做 |
+| 正文行距与原版不同（原版两行间多一行空行，点击等待图标位置不同），批次 5 对照发现，TextRender 相关 | 批次 6 |
+| 手柄只在无头环境验证了设置页和 `-joypad=dinput` 分支；实体手柄的按键/摇杆需在桌面 `./run.sh` 人工确认 | 批次 5 人工复核 |
 | 汉化 UI、字幕及语言切换尚未挂载；读汉化存档不等于完成汉化 | 批次 6 |
 | 转场仍有布局/软件合成耗时；完整 60Hz 需后续场景实测 | 批次 7 |
 

@@ -3,7 +3,7 @@
 //   - a statically linked krkrz_dev plugin (name remap), or
 //   - a TJS shim that installs native (LLLJNative) or stub members.
 // NOTES
-//  - keep the at-sign character out of this file (cmake @ONLY embedding)
+//  - keep the at-sign character out of this file (cmake configure embedding)
 //  - functions are global functions (context = global). Methods stored in a
 //    Dictionary do NOT fall back to global for unqualified names.
 
@@ -54,7 +54,9 @@ global.LLLJ = %[
 		"psd.dll" => "psdfile",
 		// E-mote: krkr-ns emoteplayer built into the exe (plugins/lllj_compat/emote).
 		// motion.tjs falls through to the nod3d name when only its placeholder exists.
-		"motionplayer_nod3d.dll" => "lllj_emote"
+		"motionplayer_nod3d.dll" => "lllj_emote",
+		// layerExDraw (GDI+ emulation): krkr-ns port built into the exe (plugins/lllj_compat/layerexdraw).
+		"layerexdraw.dll" => "lllj_layerexdraw"
 	],
 	origLink : Plugins.link,
 	origUnlink : Plugins.unlink
@@ -147,6 +149,11 @@ function lllj_shim_packinone() {
 	Scripts.makeDataPackThumb = lllj_makeDataPackThumb;
 }
 lllj_shim("packinone.dll", lllj_shim_packinone);
+// PackinOne exports that the game calls without a guard (src/layer_extras.cpp). Installed at
+// prelude time: utils.tjs and the save code use them whether or not PackinOne is linked yet.
+Storages.saveOctet = LLLJNative.saveOctet;
+Layer.fetchImageSize = LLLJNative.fetchImageSize;
+System.getKnownFolderPath = LLLJNative.getKnownFolderPath;
 // Save files are "<thumbnail image bytes><data pack>"; the thumbnail is made from the
 // layer the game passes in and returned as an octet for saveDataPack.
 function lllj_makeDataPackThumb(layer, ext, quality, component) {
@@ -170,26 +177,13 @@ function lllj_shim_proxyfs() {
 }
 lllj_shim("proxyfs.dll", lllj_shim_proxyfs);
 
-// uisystem defines these callbacks even when its optional layerStwCopy plugin
-// is absent. Keep the universal rule transition's progress unchanged then;
-// once batch 5 installs the effect object the original methods are used.
-function lllj_sysEffectOpen(t) {
-	if (typeof kag.sysTransitionEffect != "undefined") return kag.sysTransitionEffect.processOpen(t);
-	lllj_stubhit("SysTransitionEffect (layerStwCopy, batch 5)");
-	return t;
-}
-function lllj_sysEffectClose(t) {
-	if (typeof kag.sysTransitionEffect != "undefined") return kag.sysTransitionEffect.processClose(t);
-	return t;
-}
-function lllj_sysEffectStop() {
-	if (typeof kag.sysTransitionEffect != "undefined") return kag.sysTransitionEffect.processStop();
-}
-function lllj_colorPickerWithoutVector() {
-	// The game's fallback tries to load a nonexistent dummy_colorpicker image.
-	// Leave its predesigned color sample in place until layerExDraw is ported.
-	lllj_stubhit("HSVColorPicker (layerExDraw, batch 5)");
-	return null;
+// The flowchart's mini player piles its last frame onto its parent before deletion. Off D3D
+// (this port's draw device) mainwindow.tjs makes that parent, kag.uibase, an imageless binder
+// layer, so the original script's piledCopy throws "Not drawable layer type" there.
+class LLLJPlayBackViewMembers {
+	function pile() {
+		if (smp && smp.parent.hasImage) smp.parent.piledCopy(smp.left, smp.top, smp, 0, 0, smp.width, smp.height);
+	}
 }
 class LLLJGameCompatMembers {
 	function loadOtherDataID(data) {
@@ -210,17 +204,12 @@ class LLLJGameCompatMembers {
 var lllj_originalExecStorage = Scripts.execStorage;
 function lllj_execStorage(storage, mode) {
 	var r = mode === void ? lllj_originalExecStorage(storage) : lllj_originalExecStorage(storage, mode);
-	if (Storages.extractStorageName(storage).toLowerCase() == "uisystem.tjs") {
-		global.SysTransEffectOpen = lllj_sysEffectOpen;
-		global.SysTransEffectClose = lllj_sysEffectClose;
-		global.SysTransEffectStop = lllj_sysEffectStop;
-	}
-	if (Storages.extractStorageName(storage).toLowerCase() == "hsvcpick.tjs" && typeof global.GdiPlus == "undefined")
-		OptionHSVPickerModule._createColorPickerOne = lllj_colorPickerWithoutVector;
 	if (Storages.extractStorageName(storage).toLowerCase() == "mainwindow.tjs") {
 		global.lllj_originalKagKeyDown = KAGWindow.onKeyDown;
 		LLLJNative.attachMembers(LLLJGameCompatMembers, KAGWindow, true);
 	}
+	if (Storages.extractStorageName(storage).toLowerCase() == "scnchart_ui_smp.tjs")
+		LLLJNative.attachMembers(LLLJPlayBackViewMembers, PlayBackViewUtil, true);
 	return r;
 }
 Scripts.execStorage = lllj_execStorage;
@@ -340,20 +329,54 @@ lllj_shim("windowex.dll", lllj_shim_windowex);
 lllj_shim("menu.dll", lllj_nothing);
 
 lllj_shim(["drawdeviced2d.dll"], lllj_nothing);
-lllj_shim(["k2compat.dll", "msdfrender.dll", "layerstwcopy.dll"], lllj_nothing);
+lllj_shim("k2compat.dll", lllj_nothing);
+// msdfrender.dll: the Layer members behind the MSDF/SDF atlas fonts (prerenderfontex.tjs,
+// embfontloader.tjs). Natives in src/msdfrender.cpp; the argument lists are the DLL's.
+class LLLJMsdfMembers {
+	function makeGlyphMSDF(param, x, y, w, h) {
+		return LLLJNative.msdfMakeGlyph(this, false, param, x, y, w, h, void);
+	}
+	function makeGlyphSDF(param, x, y, w, h, province) {
+		return LLLJNative.msdfMakeGlyph(this, true, param, x, y, w, h, province);
+	}
+	function makeBitmapFromProvince(x, y, w, h) {
+		return LLLJNative.msdfBitmapFromProvince(this, x, y, w, h);
+	}
+	function operateGlyphToProvince(x, y, w, h, bitmap) {
+		return LLLJNative.msdfOperateProvince(this, x, y, w, h, bitmap);
+	}
+	function getAscentHeight() {
+		return LLLJNative.msdfAscentHeight(this);
+	}
+}
+function lllj_shim_msdfrender() {
+	var n = LLLJNative.attachMembers(LLLJMsdfMembers, Layer);
+	lllj_log("msdfrender: attached " + n + " Layer members");
+}
+lllj_shim("msdfrender.dll", lllj_shim_msdfrender);
+// layerStwCopy.dll: its only export is Layer.stitchWrappedCopy (src/layer_extras.cpp).
+// Linking it lets uisystem.tjs create kag.sysTransitionEffect, and the game's own
+// SysTransEffectOpen/Close/Stop drive that object for the wipe transition.
+class LLLJLayerStwMembers {
+	function stitchWrappedCopy(dx, dy, dw, dh, src, sx, sy, sw, sh, arr) {
+		return LLLJNative.stitchWrappedCopy(this, dx, dy, dw, dh, src, sx, sy, sw, sh, arr);
+	}
+}
+function lllj_shim_layerstwcopy() { LLLJNative.attachMembers(LLLJLayerStwMembers, Layer); }
+lllj_shim("layerstwcopy.dll", lllj_shim_layerstwcopy);
 // voice effects / multi-track BGM: the classes the game uses are native static members of
 // WaveSoundBuffer installed at startup (src/wave_filters.cpp: WaveDSPFilter, DelayEffect,
 // StkFreeVerb; src/multitrack.cpp: .mchx, setMultiTrackMask), so linking only has to succeed.
 // wvdecoder (WaveSoundData) only backs the unused OscLoop effect.
 lllj_shim(["wfbasiceffect.dll", "wftypicaldsp.dll", "wumultitrack.dll", "wvdecoder.dll"], lllj_nothing);
-lllj_shim(["httprequest.dll", "win32ole.dll", "gamepad.dll", "shellexecute.dll", "process.dll",
+lllj_shim(["httprequest.dll", "win32ole.dll", "shellexecute.dll", "process.dll",
 		   "messenger.dll", "addfont.dll"], lllj_nothing);
 
 function lllj_shim_toml() { Scripts.tomlDecodeFromStorage = LLLJNative.tomlDecodeFromStorage; }
 lllj_shim("toml.dll", lllj_shim_toml);
 
 // TODO (real implementations needed)
-lllj_shim(["psbfile.dll", "textrender.dll", "layerexdraw.dll"], lllj_nothing);
+lllj_shim(["psbfile.dll", "textrender.dll"], lllj_nothing);
 lllj_shim("motionplayer.dll", lllj_nothing); // D3D variant: no placeholder, never selected
 
 // Minimal MenuItem replacement (no native menus on this platform)
@@ -391,13 +414,8 @@ class MenuItem {
 	for (var i = 0; i < c.count; i += 2) MenuItem[c[i]] = c[i+1];
 }
 
-// gamepad.dll replacement for the prototype: no XInput ports (krkrz has its own SDL pad input)
-class GamepadPort {
-	var count = 0;
-	function GamepadPort() {}
-	function finalize() {}
-	function initialize(hwnd) { return false; }
-	function getController(i) { return void; }
-	function update() {}
-	function redetect() {}
-}
+// gamepad.dll: the game's legacy XInput layer (exgamepad.tjs) is not emulated. With
+// "-joypad=dinput" the game skips gamepad.dll and uses the engine's own pad input, as the
+// original does on DirectInput: krkrz's SDL gamepad support sends VK_PAD* keys, which KAG
+// maps through padKeyMap (krkrz_dev/src/core/doc/Gamepad.md). An explicit -joypad wins.
+if (System.getArgument("-joypad") === void) System.setArgument("-joypad", "dinput");

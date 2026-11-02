@@ -1,0 +1,61 @@
+layerExDraw.dll (GDI+ emulation: Appearance/Pen/Brush/Path/Matrix, Layer
+drawing members, record) vendored from KRKR-ns (MIT; LICENSE.krkrsdl3 is the
+krkrsdl3 license the code derives from).
+
+  source:  https://github.com/DrFlyingPig/krkr-ns
+           krkrsdl2/src/plugins/layerexdraw/
+  commit:  949faf9a874f54b149a3fe5382cfccb38afb99bb (2026-10-16), as E-mote
+  copied:  LayerExDraw.cpp, LayerExDraw.hpp, DrawBackend.h,
+           LayerExBase.{h,cpp,hpp}, LICENSE.krkrsdl3
+  omitted: README.md (krkr-ns' own notes on its krkrsdl2 adaptations)
+
+The copied files already carry krkr-ns' adaptations to krkrsdl2 (its README
+lists them: StorageIntf/BinaryStream/ScriptMgnIntf/MsgIntf/DebugIntf/LayerIntf
+includes, plutovg for paths, the krkr-ns font helpers). Those are not repeated.
+
+Local changes to upstream files (search for "LLLJ")
+  LayerExDraw.cpp
+      GetResourceStream: no romfs fallback (notosanssc.ttf is not shipped).
+      Returns NULL, so addPrivateFont throws "cannot open" and the text calls
+      skip a null face.
+      loadImage, addPrivateFont: krkrz reads streams with TJS::TVPReadBuffer
+      and releases them with Destruct() (was ReadBuffer / delete).
+      getRecordImage: re-renders the record onto the layer only for bitmap
+      records. A vector record (what record mode produces) has no surface;
+      redraw() cleared the layer and drew nothing, so the chart's lines
+      disappeared after getRecordImage(). Drawing already reaches the layer.
+      createPathGradientBrush (new, replaces the radial createBrush case):
+      real GDI+ PathGradientBrush. The polygon is fanned from centerPoint and
+      each pixel gets the barycentric blend of (centerColor, color_i, color_i+1)
+      in non-premultiplied ARGB. It is baked into a clamped plutovg texture over
+      the integer bounds of the points, so the fill and the pen paths both use
+      the texture case. krkr-ns' radial version used only centerColor and
+      surroundColors[0], which left the HSV picker flat. Defaults: centre =
+      average of the points, colours white. calculateBounds was removed (its
+      only caller was the old case).
+  DrawBackend.h
+      SoftBrush::applyToCanvas case 3 (radial) is no longer reached by a
+      path-gradient brush. Comment only.
+  LayerExBase.hpp
+      ObjectCache and layerExBase in namespace lllj_layerexdraw_base. Both are
+      unused here, but layerExImage and layerExRaster define types with the
+      same names and different layouts in the same executable (ODR).
+
+Build glue (no upstream equivalent)
+  lllj_layerexdraw_module.cpp   registers the static plugin "lllj_layerexdraw"
+                                (prelude.tjs maps layerExDraw.dll to it)
+  shim/lllj_layerexdraw_prefix.h  force-included into every source: names the
+                                  module (TVP_PLUGIN_NAME), includes lllj_ncbind.h
+                                  and LayerImpl.h; replaces krkr-ns' PCH and its
+                                  "ncbind/ncbind.hpp" first include (now a no-op)
+  shim/TVPSysFont.h             krkr-ns' win32 font table header; here only
+                                TVPGetAllFontList is declared (the generic build
+                                defines it, FontSystemBase.cpp)
+  ../shim/lllj_ncbind.h         shared ncbind binding (see emote/UPSTREAM.txt)
+  ../third_party/plutovg/       PlutoVG rasterizer (see its UPSTREAM.txt)
+
+Text: this port has no system font table, so a family name that is not a file
+in the storage system cannot be opened. Text calls then do nothing (null face),
+or the TJS constructor throws from addPrivateFont. The flowchart and the HSV
+picker draw no text. Not checked: the credits roll, which passes a font family
+name to the constructor.

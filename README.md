@@ -67,11 +67,14 @@ Alt+Enter 切换全屏；缩放和右键返回已回归。系统操作使用游�
 - **前置脚本** `src/prelude.tjs`（VM 初始化后、startup.tjs 前执行）：
   - 删除 krkrz 定义的 `kirikiriz_generic` 常量，让游戏走 PC 分支（否则它会当成主机版：忽略 `Plugins.link`、开 Switch UI）。
   - 接管 `Plugins.link`：DLL 名 → 静态链接的 krkrz_dev 插件（KAGParserEx、extrans、extNagano、psdfile、saveStruct、scriptsEx、layerEx* …）或 TJS 替身。
-  - 替身：PackinOne（数据包 API）、windowEx（Window/System 成员）、menu（`MenuItem`）、win32dialog（对话框一律“取消”）、getLangName、toml、gamepad（`GamepadPort` 空实现）等。
+  - 替身：PackinOne（数据包 API）、windowEx（Window/System 成员）、menu（`MenuItem`）、win32dialog（对话框一律“取消”）、getLangName、toml 等。gamepad.dll 不模拟：prelude 默认 `-joypad=dinput`，游戏改用引擎自带的 SDL 手柄（VK_PAD* 键）。
 - **原生代码**：
   - `datapack.cpp`：数据包和存档；支持 Windows 加密 TJS/4s0、JPEG APP11 分段/字节转义，以及本移植的缩略图 + TJS/ns0。
   - `toml.cpp`：`Scripts.tomlDecodeFromStorage`（toml++）。
   - `PsbFilePlugin.cpp` / `PSBData.cpp`：`PSBFile` + `psb://` 存储（移植自 krkr-ns；补了 krkrz 的 `iTVPStorageMedia2`，内存流类改名避开与 krkrz 核心同名类的 ODR 冲突）。
+  - `layerexdraw/` + `third_party/plutovg/`：layerExDraw（GDI+ 模拟，移植自 krkr-ns，PlutoVG 光栅化；PathGradient 按 GDI+ 三角扇语义重写），供流程图和颜色选择器使用。
+  - `layer_extras.cpp`：`Layer.stitchWrappedCopy`（layerStwCopy，按原 DLL 反汇编实现，系统条纹转场）、`Layer.fetchImageSize`、`Storages.saveOctet`、`System.getKnownFolderPath`。
+  - `msdfrender.cpp`：MSDF/SDF 图集字体（`makeGlyphMSDF/SDF`、`operateGlyphToProvince`、`makeBitmapFromProvince`、`getAscentHeight`，按原 DLL 反汇编实现）。
   - `TextRenderBase.cpp`：消息排版（移植自 krkr-ns；字宽改为回调脚本的 `onFontChange/onGetTextWidth`，这样预渲染字体也能量）。
   - `compat_main.cpp`：`LLLJNative`（`log`、`attachMembers`：把 TJS 类成员挂到原生类上）。
   - `frame_stats.cpp` / `storage_stats.cpp`：呈现计数、计时快照、资源索引诊断。
@@ -125,6 +128,7 @@ python3 -I tools/scenarios.py artifacts/movie-layer-01 --only movie --vomstyle l
 python3 -I tools/benchmark.py artifacts/movie-desktop-01 --movie --desktop
 python3 -I tools/emote_compare.py artifacts/compare-01      # Wine 原版 vs 移植，需要 wine/Xvfb/ImageMagick
 python3 -I tools/scenarios.py artifacts/audio-01 --only audio   # 语音特效 + 多轨 BGM
+python3 -I tools/scenarios.py artifacts/extras-01 --only extras # 批次 5：流程图/颜色轮盘/条纹转场/图集字体/转场插件
 ```
 
 Smoke 覆盖正常启动/Logo、标题、新游戏推进、backlog、存读档、CG/SD/音乐/立绘鉴赏入口、10 个设置分页、全屏/缩放、右键返回。
@@ -134,7 +138,11 @@ E-mote 后端可用 `-lllj_emote=cpu|gl` 强制；`LLLJNative.emoteStats()` 返�
 再分别以播完（跳到结尾前 3 秒）、右键、Esc 返回鉴赏，并要求视频落后音频时钟不超过 60ms。
 `--only audio`：带通幅频响应、剧本引用的 16 个特效 + `wf_reverb` 经游戏自己的 `loadFilter`/`VoiceEffectFactory` 构造后播放
 （有输出、尾音长度符合 `extend`）、语音缓冲的 `语音|特效` 路径和口型电平、14 个 `.mchx` 的打开回调与静音/恢复。
-任何 `exception occured`、REPL 失败和超时都返回非零（不再有已知例外）。
+`--only extras`：流程图连线、颜色轮盘色相、手柄设置页、backlog 条纹转场计时、`fetchImageSize`/`saveOctet`/`getKnownFolderPath`、
+mosaic/turn 及 extNagano 六种转场（`tools/emote_test.ks` 标签）。
+任何 `exception occured`、REPL 失败和超时都返回非零（不再有已知例外）；`(lllj) stub:` 只允许 `scenarios.py` 的 `WIN32_STUBS`
+（`setDpiAwareness`、`readRegValue`、`setIconicPreview`，均为 Windows 专有、无对应功能），`msdfrender not linked` 也算失败。
+`tools/emote_compare.py` 除 E-mote 外还对照流程图、设置页、mosaic/turn/条纹转场中途和名字栏（系统画面用 `kag.sysbase` 的 `piledCopy` 截取）。
 
 `./run.sh -lllj_fps=yes` 每秒输出 `(lllj) fps: {...}`，不需要显示统计叠层。TJS 可用
 `LLLJNative.resetFrameStats("scene")`、`LLLJNative.frameStats()`、`LLLJNative.storageStats()`。
@@ -149,12 +157,11 @@ E-mote 后端可用 `-lllj_emote=cpu|gl` 强制；`LLLJNative.emoteStats()` 返�
 ## 现状
 
 能用：启动 → ATTENTION → 标题菜单 → はじめから → 序章；背景、事件 CG（pimg 差分）、立绘、头像窗、对话框文字、名字栏、
-rule 转场、BGM（opus）、语音（ogg）、快存/快读（含缩略图）；E-mote（批次 2）；OP/ED 视频（批次 3）。
+rule 转场、BGM（opus）、语音（ogg）、快存/快读（含缩略图）；E-mote（批次 2）；OP/ED 视频（批次 3）；
+语音特效与多轨 BGM（批次 4）；流程图、颜色选择器、系统条纹转场、图集字体、手柄（批次 5）。
 
 未做（按计划后续处理）：
-- 语音特效（wf* DSP 滤镜，电话/对讲机声）——报错被捕获，声音无特效。
-- layerExDraw（GDI+ 绘图）、msdfrender、汉化补丁、glibc 2.31 发行构建。
-- 颜色选择器和附加系统转场需要批次 5 的 layerExDraw/layerStwCopy；目前保留色样和普通规则转场，记录明确的 stub。
+- 汉化补丁（批次 6）、60Hz 优化（批次 7）、glibc 2.31 发行构建。
 
 批次 1 已修复 `SetupFullHDMovie` / `onResize`，挂载去码包并补齐存档、索引和测试基础设施。
 16 个无名文件保留哈希名，通过 Hxv4 回退查找；原始名字仍未恢复。

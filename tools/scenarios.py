@@ -149,6 +149,21 @@ class Session:
         (self.out / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2))
 
 
+# System members the game calls that have no Win32 counterpart on this port. prelude.tjs
+# stubs them (lllj_stub) and each returns the value the game takes when the facility is
+# absent. Any other "(lllj) stub:" line fails a run, so a new stub must be evaluated here.
+WIN32_STUBS = {
+    "System.setDpiAwareness": "mainwindow.tjs requests per-monitor DPI awareness at startup; SDL scales the window itself",
+    "System.readRegValue": "utils.tjs (getSystemMouseCursor, expandEnvironmentString) and speech_dlg read the Windows registry; no value selects the defaults",
+    "System.setIconicPreview": "mainwindow.tjs sets the Windows taskbar thumbnail preview; Linux desktops have no such surface",
+}
+
+
+def stubs_seen(path):
+    import re
+    return sorted(set(re.findall(r"\(lllj\) stub: (\S+)", Path(path).read_text(errors="replace"))))
+
+
 def check_log(path):
     # Exact call sites only. All unmatched exceptions remain failures.
     import re
@@ -159,6 +174,11 @@ def check_log(path):
     headers = text.count("exception occured")
     if "source unsupported" in text:  # E-mote content the runtime cannot draw
         raise AssertionError("E-mote reported an unsupported source; see game.log")
+    if "msdfrender not linked" in text:  # PreRenderFontEx would fall back to plain glyphs
+        raise AssertionError("PreRenderFontEx reported msdfrender not linked; see game.log")
+    unexpected = [name for name in stubs_seen(path) if name not in WIN32_STUBS]
+    if unexpected:
+        raise AssertionError(f"Unevaluated prelude stubs were called: {unexpected}; see game.log")
     if headers != len(matches) or unknown or "[dialog] Information:" in text or "prelude error:" in text:
         raise AssertionError(f"Unhandled/unexpected game errors: {unknown}; headers={headers}, parsed={len(matches)}")
     return known
@@ -568,12 +588,149 @@ def audio(session):
     return check_log(session.out / "game.log")
 
 
+# Screen points at 1920x1080. Flowchart: a connector between two chart nodes and the
+# background beside it. Option Text page: four points on the colour wheel's hue ring.
+FLOWCHART_CONNECTOR = [943, 580]
+FLOWCHART_BACKGROUND = [1300, 600]
+HSV_RING = [[1612, 232], [1737, 357], [1487, 357], [1612, 470]]
+# transitions: (step name, label in tools/emote_test.ks, TJS run first or None)
+TRANSITIONS = [
+    ("mosaic_game", "trans_mosaic", None),  # the game's own table entries
+    ("turn_game", "trans_turn", None),
+    ("mosaic_extrans", "trans_method", 'tf.llljMethod="mosaic",tf.llljTime=750'),
+    ("turn_extrans", "trans_method", 'tf.llljMethod="turn",tf.llljTime=1000'),
+] + [(f"{method}_nagano", "trans_method", f'tf.llljMethod="{method}",tf.llljTime=700')
+     for method in ("blurfade", "flutter", "multiripple", "scanline", "zoomfade", "spin")]
+
+
+def luma(colour):
+    return ((colour >> 16) & 255) * 0.3 + ((colour >> 8) & 255) * 0.59 + (colour & 255) * 0.11
+
+
+def far_apart(colours, threshold=60):
+    def distance(a, b):
+        return max(abs(((a >> shift) & 255) - ((b >> shift) & 255)) for shift in (0, 8, 16))
+    return all(distance(a, b) > threshold for i, a in enumerate(colours) for b in colours[i + 1:])
+
+
+def png_pixels(session, path, points):
+    """0xRRGGBB at each point of a captured PNG, read by the engine's own Bitmap loader."""
+    return session.obj("(function(){ var b = new Bitmap(); b.load(%s); var p = %s, r = []; "
+                       "for (var i = 0; i < p.count; i++) r.add(b.getPixel(p[i][0], p[i][1]) & 0xFFFFFF); "
+                       "return r; })()" % (json.dumps(str(path), ensure_ascii=False), json.dumps(points)))
+
+
+def exception_count(session):
+    return (session.out / "game.log").read_text(errors="replace").count("exception occured")
+
+
+def stripe_wipe(session):
+    """Open the backlog from the game and time the system stripe wipe (layerStwCopy).
+    cureff is true while kag.sysTransitionEffect is running and false once it has settled."""
+    active = "(typeof kag.sysTransitionEffect == 'Object' && !!kag.sysTransitionEffect.cureff)"
+    session.ev("SystemAction.backlog()")
+    deadline = time.monotonic() + 10
+    while session.ev(f"!!{active}") != "1":
+        assert time.monotonic() < deadline, "backlog did not start the stripe wipe"
+        time.sleep(0.01)
+    started = time.monotonic()
+    while session.ev(f"!!{active}") == "1":
+        assert time.monotonic() < started + 10, "stripe wipe never settled"
+        time.sleep(0.01)
+    return round((time.monotonic() - started) * 1000)
+
+
+def extras(session):
+    """Batch 5: layerExDraw (flowchart, colour wheel), the stripe wipe, the PackinOne exports,
+    msdfrender atlas text (Text page sliders, flowchart headers), the gamepad page, and every
+    transition the scenarios and the extrans/extNagano plugins provide. Runs after finish_startup."""
+    session.ev(f"Storages.addAutoPath({json.dumps(str(ROOT / 'tools') + '/')})")
+
+    # PackinOne / layerStwCopy exports that need no screen
+    size = session.obj("Layer.fetchImageSize('attention')")
+    session.steps.append({"name": "fetchImageSize_attention", "size": size})
+    assert size == [1920, 1080], f"Layer.fetchImageSize('attention') = {size}"
+    octet = session.obj("(function(){ var dst = System.dataPath + 'extras_octet.png'; "
+                        "Storages.saveOctet(dst, LLLJNative.readOctet('attention.png')); "
+                        "var back = LLLJNative.readOctet(dst), src = LLLJNative.readOctet('attention.png'); "
+                        "return [Storages.isExistentStorage(dst), back.length, back === src, "
+                        "back === LLLJNative.readOctet('aboutdialog.png')]; })()")
+    session.steps.append({"name": "saveOctet_roundtrip", "result": {"exists": octet[0], "length": octet[1],
+                          "equal_to_source": octet[2], "equal_to_other_image": octet[3]}})
+    # TJS booleans arrive as 1 / 0 through Scripts.toJSONString
+    assert octet[0] and octet[1] > 0 and octet[2] and not octet[3], f"saveOctet round trip: {octet}"
+    folder = session.obj("System.getKnownFolderPath('Captures', 34816)")
+    session.steps.append({"name": "getKnownFolderPath_captures", "path": folder, "is_dir": Path(folder).is_dir()})
+    assert folder, "System.getKnownFolderPath('Captures') returned nothing"
+    assert session.ev("typeof Layer.makeGlyphMSDF") == '"Object"', "msdfrender members are not attached"
+
+    # flowchart: layerExDraw lines and minimap, then back to the title
+    session.jump("custom.ks", "*flowchart", "scnchart")
+    time.sleep(1.5)
+    assert session.ev("typeof GdiPlus") == '"Object"', "GdiPlus (layerExDraw) is not registered"
+    session.step("13_flowchart", 0.5)
+    line, background = png_pixels(session, session.out / "13_flowchart.png", [FLOWCHART_CONNECTOR, FLOWCHART_BACKGROUND])
+    session.steps[-1]["connector_colour"] = f"{line:06X}"
+    session.steps[-1]["background_colour"] = f"{background:06X}"
+    assert luma(line) > luma(background) + 80, f"flowchart connector is not drawn: {line:06X} over {background:06X}"
+    session.jump("scnchart.ks", "*back", "title")
+    session.step("13_flowchart_back", 1)
+
+    # option Text page: HSV colour wheel (layerExDraw) and atlas slider digits (msdfrender)
+    session.jump("title.ks", "*option", "option")
+    session.ev('Current.page=4,kag.process("option.ks","*page")')
+    session.wait('Current.propget("page") == 4')
+    time.sleep(1.0)
+    session.step("14_option_text")
+    ring = png_pixels(session, session.out / "14_option_text.png", HSV_RING)
+    session.steps[-1]["hsv_ring"] = [f"{c:06X}" for c in ring]
+    assert far_apart(ring), f"colour wheel has no hue variation: {[f'{c:06X}' for c in ring]}"
+
+    # option gamepad page (index 9): the game's pad input through -joypad=dinput
+    session.ev('Current.page=9,kag.process("option.ks","*page")')
+    session.wait('Current.propget("page") == 9')
+    session.step("15_option_gamepad")
+    session.jump("option.ks", "*back", "title")
+
+    # game: the backlog opens through the system stripe wipe (layerStwCopy)
+    session.jump("title.ks", "*game", "game")
+    session.wait('typeof world_object.player == "Object" && world_object.player.curPoint > 0', 60)
+    advance(session, 2)
+    wipe_ms = stripe_wipe(session)
+    session.steps.append({"name": "stripe_wipe_backlog", "active_ms": wipe_ms})
+    assert 50 <= wipe_ms <= 5000, f"stripe wipe lasted {wipe_ms}ms"
+    session.wait('SystemHook.currentState == "backlog"')
+    session.step("16_backlog")
+    session.jump("backlog.ks", "*back", "game")
+    session.wait('typeof world_object.player == "Object" && world_object.player.curPoint > 0')
+    session.wait("kag.inStable")
+
+    # Transitions on the striped overlay (emote_test.ks). Each must run to completion without
+    # a game exception and return to a stable state. The distinct mid-transition frame count
+    # is recorded, not asserted: whether the effect is drawn is checked against Wine by
+    # tools/emote_compare.py.
+    for name, label, settings in TRANSITIONS:
+        before = exception_count(session)
+        if settings:
+            session.ev(settings)
+        session.ev(f'kag.process("emote_test.ks","*{label}")')
+        distinct = frames_differ(session, f"18_{name}", 3, 0.15)
+        session.wait("kag.inStable", 30)
+        session.capture(f"18_{name}_done")
+        new = exception_count(session) - before
+        session.steps.append({"name": f"18_{name}", "label": label, "settings": settings,
+                              "distinct_mid_frames": distinct, "new_exceptions": new})
+        print(f"{name}: {distinct} distinct frames, {new} new exceptions", flush=True)
+        assert new == 0, f"{name} raised {new} game exception(s); see game.log"
+    session.write_report()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("out", type=Path)
     parser.add_argument("lines", nargs="?", type=int, default=6)
     parser.add_argument("--sample-seconds", type=float, default=1)
-    parser.add_argument("--only", choices=("all", "gallery", "settings", "controls", "emote", "movie", "audio"), default="all")
+    parser.add_argument("--only", choices=("all", "gallery", "settings", "controls", "emote", "movie", "audio", "extras"), default="all")
     parser.add_argument("--vomstyle", choices=("overlay", "mixer", "layer", "mfevr"),
                         help="movie: force a VideoOverlay mode and only play the OP")
     args = parser.parse_args()
@@ -593,7 +750,8 @@ def main():
             session.finish_startup()
             globals()[args.only](session)
             known = check_log(session.out / "game.log")
-        session.write_report(passed=True, known_exceptions=known)
+        seen = stubs_seen(session.out / "game.log")
+        session.write_report(passed=True, known_exceptions=known, win32_stubs={n: WIN32_STUBS[n] for n in seen})
         print(f"PASS: {session.out}/report.json")
     except Exception as error:
         session.write_report(passed=False, error=str(error))

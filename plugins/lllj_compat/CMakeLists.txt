@@ -14,7 +14,8 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${LLLJ_DIR}/src/p
 file(GLOB LLLJ_SRC CONFIGURE_DEPENDS ${LLLJ_DIR}/src/*.cpp)
 
 # E-mote runtime vendored from krkr-ns (see emote/UPSTREAM.txt). emote/shim
-# adapts its SDL2/Switch/ncbind includes; ncbind itself comes from krkrz_dev.
+# adapts its SDL2/Switch/ncbind includes; shim/lllj_ncbind.h is the ncbind
+# binding shared with layerexdraw/ (ncbind itself comes from krkrz_dev).
 file(GLOB LLLJ_EMOTE_SRC CONFIGURE_DEPENDS ${LLLJ_DIR}/emote/*.cpp)
 # krkr-ns builds them with a precompiled header; emote/shim/lllj_emote_prefix.h
 # is force-included instead so the sources stay unchanged. They are compiled by
@@ -25,6 +26,20 @@ set_source_files_properties(${LLLJ_EMOTE_SRC} DIRECTORY ${CMAKE_SOURCE_DIR}/src/
 # rasterizer remains as the self-test fallback and for -lllj_emote=cpu.
 set_property(SOURCE ${LLLJ_EMOTE_SRC} DIRECTORY ${CMAKE_SOURCE_DIR}/src/core
     APPEND PROPERTY COMPILE_DEFINITIONS LLLJ_EMOTE_GL)
+
+# layerExDraw.dll: GDI+ emulation vendored from krkr-ns (layerexdraw/UPSTREAM.txt),
+# rasterized by PlutoVG (third_party/plutovg/UPSTREAM.txt). Like E-mote, the
+# module prefix is force-included. layerexdraw/shim is per source (it provides
+# TVPSysFont.h) so that name stays invisible to the rest of the engine.
+file(GLOB LLLJ_LAYEREXDRAW_SRC CONFIGURE_DEPENDS ${LLLJ_DIR}/layerexdraw/*.cpp)
+set_source_files_properties(${LLLJ_LAYEREXDRAW_SRC} DIRECTORY ${CMAKE_SOURCE_DIR}/src/core
+    PROPERTIES COMPILE_OPTIONS
+    "-include;${LLLJ_DIR}/layerexdraw/shim/lllj_layerexdraw_prefix.h;-iquote;${LLLJ_DIR}/layerexdraw/shim")
+# PlutoVG (MIT + FreeType license): plain C, linked statically (PLUTOVG_BUILD_STATIC
+# only changes the visibility macros, which are empty on Linux).
+file(GLOB LLLJ_PLUTOVG_SRC CONFIGURE_DEPENDS ${LLLJ_DIR}/third_party/plutovg/source/*.c)
+set_property(SOURCE ${LLLJ_PLUTOVG_SRC} DIRECTORY ${CMAKE_SOURCE_DIR}/src/core
+    APPEND PROPERTY COMPILE_DEFINITIONS PLUTOVG_BUILD_STATIC)
 
 # DSPFilters (MIT, third_party/DSPFilters/UPSTREAM.txt) for WaveSoundBuffer.WaveDSPFilter
 # (src/wave_filters.cpp).
@@ -46,9 +61,11 @@ foreach(lib avformat avcodec avutil)
 endforeach()
 set(CMAKE_BUILD_RPATH ${CMAKE_BUILD_RPATH} "\$ORIGIN" PARENT_SCOPE)
 
-set(KRKRZ_SRC_ADD ${KRKRZ_SRC_ADD} ${LLLJ_SRC} ${LLLJ_EMOTE_SRC} ${LLLJ_DSPFILTERS_SRC} PARENT_SCOPE)
+set(KRKRZ_SRC_ADD ${KRKRZ_SRC_ADD} ${LLLJ_SRC} ${LLLJ_EMOTE_SRC} ${LLLJ_LAYEREXDRAW_SRC}
+    ${LLLJ_PLUTOVG_SRC} ${LLLJ_DSPFILTERS_SRC} PARENT_SCOPE)
 set(KRKRZ_LIB_ADD ${KRKRZ_LIB_ADD} ${LLLJ_FFMPEG_LIBS} PARENT_SCOPE)
 set(KRKRZ_INC ${KRKRZ_INC} ${LLLJ_DIR}/src ${CMAKE_CURRENT_BINARY_DIR}
-    ${LLLJ_DIR}/emote/shim ${LLLJ_DIR}/emote ${CMAKE_SOURCE_DIR}/src/plugins
+    ${LLLJ_DIR}/shim ${LLLJ_DIR}/emote/shim ${LLLJ_DIR}/emote ${CMAKE_SOURCE_DIR}/src/plugins
     ${LLLJ_FFMPEG_DIR}/include ${LLLJ_DIR}/third_party/DSPFilters/include
+    ${LLLJ_DIR}/third_party/plutovg/include
     ${CMAKE_SOURCE_DIR}/src/core/external/movie-player/extlibs/libyuv/include PARENT_SCOPE)

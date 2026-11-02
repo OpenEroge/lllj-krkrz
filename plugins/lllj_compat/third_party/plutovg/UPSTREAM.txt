@@ -1,0 +1,16 @@
+PlutoVG 1.3.3, the rasterizer behind layerExDraw.dll (layerexdraw/).
+
+  source:  https://github.com/sammycage/plutovg
+           via ref/krkr-ns/krkrsdl2/external/plutovg (KRKR-ns vendored copy)
+  commit:  f63f9b5 (upstream has no tagged releases; the commit is the pin)
+  license: LICENSE (MIT, PlutoVG itself); source/FTL.TXT (FreeType License,
+           for the rasterizer and stroker it embeds, prefixed PVG_FT_)
+
+Local changes: none in this tree. include/ and source/ are copied unchanged from
+the KRKR-ns tree, which carries one patch of its own (source/plutovg-font.c,
+__SWITCH__ guards that read font files into memory instead of mmap, for libnx).
+It is compiled out on Linux and kept as is.
+
+Build: the .c files are compiled by plugins/lllj_compat/CMakeLists.txt into the
+engine executable with PLUTOVG_BUILD_STATIC. include/ is on the engine include
+path (plutovg.h is used as <plutovg.h>).
