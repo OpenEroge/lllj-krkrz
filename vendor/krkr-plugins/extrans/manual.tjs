@@ -1,0 +1,83 @@
+/**
+ * 擬似コードによるマニュアル
+ * @description 吉里吉里Z 追加トランジションプラグイン extrans。
+ *
+ * 本プラグインは 7 種類のトランジション（wave / mosaic / turn / rotatezoom /
+ * rotatevanish / rotateswap / ripple）を登録します。いずれも
+ * Layer.beginTransition() または KAG の trans タグでトランジション名を指定して
+ * 使用します。オプションは辞書（Dictionary）で渡します。
+ *
+ * すべてのトランジションに共通のオプション time（所要時間・ミリ秒, 2 以上）は
+ * 必須です。以下の各擬似関数は「トランジション名」と「指定可能なオプション」を
+ * 表します（実際の関数呼び出しではなく、オプションキーの一覧として参照してください）。
+ *
+ *   例) layer.beginTransition("wave", true, %[ time: 1000, maxh: 60 ]);
+ */
+
+/**
+ * wave : ラスタスクロールによる波状のトランジション
+ * @param time 所要時間（ミリ秒, 必須）
+ * @param maxh 最大振幅（ピクセル, 既定 50）
+ * @param maxomega 最大角速度（既定 0.2）
+ * @param bgcolor1 背景色その1 0xRRGGBB（既定 0）
+ * @param bgcolor2 背景色その2 0xRRGGBB（既定 0）
+ * @param wavetype 波の細かさ 0:最初と最後 / 1:最初 / 2:最後（既定 0）
+ */
+function wave(time, maxh, maxomega, bgcolor1, bgcolor2, wavetype);
+
+/**
+ * mosaic : モザイク状に切り替わるトランジション
+ * @param time 所要時間（ミリ秒, 必須）
+ * @param maxsize 最大ブロックサイズ（ピクセル, 既定 30）
+ */
+function mosaic(time, maxsize);
+
+/**
+ * turn : ページをめくるようなトランジション
+ * @param time 所要時間（ミリ秒, 必須）
+ * @param bgcolor 背景色 0xRRGGBB（既定 0）
+ */
+function turn(time, bgcolor);
+
+/**
+ * rotatezoom : 回転・ズームしながら切り替わるトランジション
+ * @param time 所要時間（ミリ秒, 必須）
+ * @param factor 拡大率（既定 1）
+ * @param accel 拡大加速度（既定 0）
+ * @param twist ひねり量（既定 2）
+ * @param twistaccel ひねり加速度（既定 -2）
+ * @param centerx 回転中心 X（省略時は画像中央）
+ * @param centery 回転中心 Y（省略時は画像中央）
+ */
+function rotatezoom(time, factor, accel, twist, twistaccel, centerx, centery);
+
+/**
+ * rotatevanish : 回転しながら消えていくトランジション
+ * @param time 所要時間（ミリ秒, 必須）
+ * @param accel 加速度（既定 2）
+ * @param twist ひねり量（既定 2）
+ * @param twistaccel ひねり加速度（既定 2）
+ * @param centerx 回転中心 X（省略時は画像中央）
+ * @param centery 回転中心 Y（省略時は画像中央）
+ */
+function rotatevanish(time, accel, twist, twistaccel, centerx, centery);
+
+/**
+ * rotateswap : 回転しながら入れ替わるトランジション
+ * @param time 所要時間（ミリ秒, 必須）
+ * @param bgcolor 背景色 0xRRGGBB（既定 0）
+ * @param twist ひねり量（既定 1）
+ */
+function rotateswap(time, bgcolor, twist);
+
+/**
+ * ripple : 波紋状に広がるトランジション
+ * @param time 所要時間（ミリ秒, 必須）
+ * @param centerx 波紋中心 X（省略時は画像中央）
+ * @param centery 波紋中心 Y（省略時は画像中央）
+ * @param rwidth 波紋の幅（既定 128）
+ * @param roundness 円形度
+ * @param speed 波紋の速度
+ * @param maxdrift 最大ゆがみ量（ピクセル, 既定 24）
+ */
+function ripple(time, centerx, centery, rwidth, roundness, speed, maxdrift);

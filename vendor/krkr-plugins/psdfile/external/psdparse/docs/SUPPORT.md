@@ -1,0 +1,262 @@
+# psdparse PSD 対応状況 (Support Matrix)
+
+psdparse が PSD のどの機能を、どの水準で扱えるかの一覧です。psdparse は
+**参照 (読み取り) + ラウンドトリップ保存** を土台に、**構造編集 (レイヤの
+追加/削除/並べ替え/複製、画素・マスク・パラメータ・効果・テキストの編集、
+ゼロからの新規作成、レイヤグループの作成)** まで対応します (v0.12.0)。未編集のファイルは byte-identical
+に保存され、編集した部分だけがフィールドから再構築されます。レイヤからの再合成
+(描画モード・グループ・クリッピング・マスク・塗り/シェイプ・レイヤー効果) にも
+対応します (0.13.0)。
+
+対応状況の凡例:
+
+| 記号 | 意味 |
+|:---:|---|
+| ✅ | 対応済み — 構造化して取得 / 編集できる |
+| 🟡 | 部分対応 — 一部の値のみ / 生 descriptor 経由 |
+| 📦 | 生バイトのみ保持 (ラウンドトリップ用。Python へは未公開) |
+| ❌ | 未対応 — パースしていない |
+
+API 欄は Python 名です。C++ 側の対応するメソッドは `psdparse/psdfile.h` /
+`psdparse/psdengine.h` を参照 (Python API は C++ の公開編集面を一通り覆っています)。
+
+最終更新: 2026-08-18 (v0.12.0)。詳細な今後の計画は [ROADMAP.md](ROADMAP.md)、
+Python API の使い方は [PYTHON_API.md](PYTHON_API.md) を参照。
+
+---
+
+## ファイル全体
+
+| 機能 | 状況 | 備考 |
+|---|:---:|---|
+| ヘッダ (幅/高さ/チャンネル/深度/モード/版) | ✅ | `PSDFile.header` |
+| 解像度 (dpi, image resource 1005) | ✅ | `header.hres` / `header.vres` |
+| PSB (large document, version 2) | ✅ | `header.is_psb`。8 byte 長のセクション / チャンネル / 追加情報キー、4 byte の RLE 行長に対応。読み取り・編集・保存とも可 (0.13.0)。ただし内部のオフセットは 32bit なので 2GB を超えるファイルは不可 |
+| 壊れたファイルへの耐性 | ✅ | 途中で切れた / バイトが壊れたファイルでも落ちない (例外か False)。宣言された寸法がデータ量に見合わなければ、出力バッファを確保する前に断る (0.13.0) |
+| ラウンドトリップ保存 (byte-identical) | ✅ | `load(a) -> save(b)` が完全一致 (未編集時)。psd-tools のテスト素材 315 件 (Photoshop 製の PSD/PSB と他社製を含む) で確認。`PSDPARSE_CORPUS=<フォルダ>` で手元の素材にも同じテストを回せる |
+
+## 編集して保存 (edit & save, v0.7.0–v0.10.0)
+
+版の表記は Python API が使えるようになった版です (C++ 側は 0.9.0 で先行、
+Python バインディングが 0.10.0)。
+
+編集は「参照のみ・保存時に再構築」モデル。未編集のレイヤは生バイトをそのまま
+書き出すので byte-identical を維持し、編集した部分だけがフィールドから再構築
+される。画素系は **8bit RGB 文書のみ**。
+
+| 機能 | 状況 | API |
+|---|:---:|---|
+| パラメータ変更 (不透明度/可視/クリップ/ブレンド) | ✅ | `layer.opacity`/`visible`/`clipping`/`set_blend_mode()` |
+| 塗り不透明度 (fill opacity) | ✅ | `layer.fill_opacity = ...` (iOpa) |
+| レイヤ改名 | ✅ | `layer.name_unicode = ...` / `set_layer_name()` (Pascal + luni) |
+| レイヤ削除 / 並べ替え / 複製 | ✅ | `delete_layer` / `move_layer` / `duplicate_layer` (`move_layer` は 1 枚単位。フォルダは塊で付いてこない) |
+| フォルダを塊で移動 (区切り + 中身) | ✅ | `move_layer_sibling(i, up)` / `group_span(i)` / `move_layer_range(from, count, to)` (v0.10.0) |
+| 構造編集後の親子関係 (`parent_index`) 貼り直し | ✅ | 削除/移動/複製/コピー/追加の後で自動 (`relinkGroups`, v0.10.0) |
+| 別 PSD からレイヤコピー | ✅ | `copy_layer_from(src, i)` — src を save まで生存させる |
+| 画素差し替え | ✅ | `set_layer_pixels(i, bgra, w, h)` (RLE 符号化) |
+| 画像レイヤ新規追加 | ✅ | `add_layer(name, l, t, bgra, w, h)` (名前は luni で Unicode) |
+| 完全新規 PSD 作成 | ✅ | `create_blank(w, h)` → `add_layer` → `save` |
+| マスク値編集 (disabled/density/feather/default色) | ✅ | `set_layer_mask(i, ...)` — 矩形/画素は不変 |
+| マスク画素 / 矩形 (幾何) の設定 | ✅ | `set_layer_mask_pixels(i, gray, top, left, w, h)` |
+| 効果 (lfx2) の値編集 | ✅ | `set_effects(i, changes)` — descriptor シリアライザ byte-exact |
+| 任意 descriptor (塗り SoCo/GdFl/PtFl 等) の値編集 | ✅ | `set_layer_descriptor(i, key, changes)` |
+| テキスト本文の編集 | ✅ | `set_text(i, str)` — EngineData シリアライザ byte-exact |
+| テキストのラン単位スタイル編集 | ✅ | `set_run_style(i, run, font=/size_px=/color=/tracking=/kerning=/bold=/italic=/underline=)` (v0.7.0) |
+| テキストのフォント変更 (FontSet へ追記) | ✅ | `set_run_style(i, run, font="Arial")` — FontSet に無ければ追記 (v0.10.0) |
+| 本文 + ラン / 段落構成のまとめ差し替え (リッチテキスト) | ✅ | `set_rich_text(i, text, runs, paragraphs)` (v0.10.0)。未指定の書式は元の先頭ランを踏襲 |
+| 段落の行揃え編集 | ✅ | `set_justification(i, j, para_index=-1)` (v0.10.0)。既定 -1 で全段落 |
+| フォント候補の列挙 (FontSet) | ✅ | `text_fonts(i)` (v0.10.0) |
+| テキストの位置 (TySh 変換行列) 編集 | ✅ | `move_text_layer(i, dx, dy)` / `text_transform(i)` / `set_text_transform(i, m)` (v0.10.0)。move はレイヤ矩形とマスク矩形も同時にずらす |
+| テキストの流し込み枠 (descriptor `bounds`) 編集 | ✅ | `text_bounds(i)` / `set_text_bounds(i, l,t,r,b)` (v0.10.0)。実際に流し込みが変わるのは段落 (box) テキストのみ |
+| **Txt2 (文書ぜんたいの Text Engine Data) の追随 / 削除** | ✅ | `set_text_engine_policy(0=SYNC/1=REMOVE/2=KEEP)` / `drop_text_engine_data()` (v0.12.0)。**Photoshop は Txt2 を TySh より優先して読む**ので、これが無いと編集が Photoshop に届かない |
+| マスク幾何の単独編集 (画素なし) | 🟡 | `set_layer_mask_pixels` で画素とセットのみ |
+| 合成済み画像 (composite) の入れ替え | ✅ | `set_merged_image(bgra)` — Python で合成した結果を書き戻せる (v0.7.x) |
+| 合成済み画像を単色プレビューにする | ✅ | `set_merged_image_solid(r,g,b)` (v0.12.0) — RLE 圧縮なので巨大キャンバスでも小さい。Photoshop が「PSD 互換を優先」を切ったときと同じ形 |
+| 効果込みの合成 (composite) の再生成 | 🟡 | `composite()` で作った画像を `set_merged_image` で書き戻せる (0.13.0)。保存時に自動では行わない |
+
+## 圧縮 / ビット深度
+
+| 項目 | 状況 | 備考 |
+|---|:---:|---|
+| Raw / RLE(PackBits) / ZIP(±prediction) | ✅ | 展開対応。PackBits は符号化 (save 時のレイヤ画素書き出し) も対応 |
+| ビット深度 1 / 8 / 16 / 32 | ✅ | それ以外は非対応 |
+| 16/32bit 文書のレイヤ (`Lr16` / `Lr32`) | ✅ | Photoshop は 16/32bit のレイヤを layer info ではなく文書末尾の `Lr16` / `Lr32` に置く。これを読み、構造編集後の保存ではそのブロックを書き直す (`PSDFile.layer_source`、0.13.0)。画素編集は 8bit のみ |
+| 16/32bit のマスク合成 (`layer_image(i)`) | ✅ | 以前は big-endian の値を整数のまま掛けていて誤っていた (0.13.0 で修正) |
+
+## カラーモード (ピクセル展開: `merged_image` / `layer_image`)
+
+| モード | 状況 | 備考 |
+|---|:---:|---|
+| Bitmap (1bit) | ✅ | |
+| Grayscale (8/16/32) | ✅ | 32bit は線形光として sRGB へ符号化 (下の RGB と同じ) |
+| RGB (8/16/32) | ✅ | 32bit (float) は線形光なので sRGB の伝達特性で 8bit へ符号化し、範囲外は頭打ち。Photoshop が保存するサムネイルと一致 (0.13.0 で修正。以前は値 x 255 の切り捨てで暗く、1.0 超えは桁あふれしていた) |
+| Indexed (8bit) | ✅ | パレットは `PSDFile.color_table` |
+| CMYK (8/16/32) | ✅ | RGB へ変換して出力 |
+| Multichannel | 🟡 | `merged_image()` は RGB への正準的変換が無く未対応。各チャンネルは `alpha_channels` / `merged_channel(plane)` でグレーとして取れる (0.13.0) |
+| Duotone (8/16/32) | ✅ | grayscale として展開 (Adobe 仕様: duotone データは gray) |
+| Lab (8/16) | ✅ | 標準 D65 CIELAB→sRGB 近似で変換 (Photoshop は D50 のため彩度の高い色は差あり)。32bit Lab は非存在 |
+
+出力は常に **BGRA インターリーブ** (4 byte/px)。ICC を用いた色変換は行いません。
+
+## 画像取得
+
+| 機能 | 状況 | 備考 |
+|---|:---:|---|
+| 合成画像 (merged/composite) | ✅ | `merged_image()` — PSD 保存済みの合成を返す |
+| レイヤ画像 (mask 込み/無し/mask のみ) | ✅ | `layer_image(i, "masked"/"image"/"mask")` |
+| レイヤからの再合成 | 🟡 | `composite(effects=True, background=None)` (0.13.0)。下の「再合成」を参照 |
+| レイヤ 1 枚を効果込みで描く | ✅ | `render_layer(i, effects=True)` → 効果のはみ出しを含む矩形 (0.13.0) |
+
+## 再合成 (`composite()`, 0.13.0)
+
+保存済みの合成画像ではなく、レイヤから文書を描き直します。描画処理は C API
+`psdfx` (`psdparse/psdfx.h`、[PSDFX.md](PSDFX.md)) にまとまっていて、Python 以外の
+組み込み先からも同じ処理を呼べます。
+
+| 項目 | 状況 | 備考 |
+|---|:---:|---|
+| 描画モード (27 種) | ✅ | 通常〜輝度。リニアバーンなど 8 つのモードでは「塗り」が特別に効く (色を中立色へ寄せる) のも Photoshop と同じ。ディザ合成は通常として描く (Photoshop の乱数パターンは再現しない) |
+| グループ (通過 / 通過以外) | ✅ | `lsct` の描画モードを使う。塗りの不透明度が 100% 未満の通過グループは独立して描く。グループのマスク (ユーザー / ベクタ) とレイヤー効果も描く |
+| クリッピング | ✅ | 範囲は下地の画素の形。グループ / 調整レイヤを下地にするクリップ、クリップされたグループ、「クリップしたレイヤーをグループとして描画」(`clbl`) の切り替え、通過グループを下地にするクリップに対応。クリップしたレイヤは下地のアルファを変えずに重ねる (下地が半透明でも) |
+| ノックアウト (浅い / 深い) | ✅ | 浅いは内側のグループの開始時点、深いは背景レイヤまで (途中の独立したグループで止まる) |
+| レイヤマスク (濃度 / ぼかし / 反転系フラグ) / ベクトルマスク | ✅ | ぼかしは σ = ぼかしの値のガウス (Photoshop で測定) |
+| 塗りつぶしレイヤ (単色 / グラデーション / パターン) | ✅ | グラデーションの補間方法はクラシック / 線形 (線形光) / 知覚的 (Oklab) / 滑らか。知覚的・滑らかは色相が大きく変わる区間で少し差が出る。ノイズグラデーションは未対応 |
+| シェイプレイヤの塗り | ✅ | 保存済みの画素、無ければベクトルマスクから塗る |
+| シェイプの線 (`vstk`) | ✅ | 線幅 (pt は文書の解像度で換算) / 位置 (内側・中央・外側) / 端 / 角 / 破線。保存画素があればマスクの形を「塗り ∪ 線」にして使い、無ければパスから描く。線はレイヤのオーバーレイ / サテン / 光彩 (内側) / シャドウ (内側) と、クリップされたレイヤの上に乗る (ベベルと境界線の効果は線の上) |
+| 塗りの不透明度 / チャンネル制限 / アートボード | ✅ | |
+| レイヤー効果 | 🟡 | ドロップシャドウ / シャドウ (内側) / 光彩 (外側・内側) / 境界線 / カラー・グラデーション・パターンオーバーレイ / サテン / ベベルとエンボス。同じ種類の複数指定 (`*Multi`、`lmfx`)、グループの効果も描く。光彩・シャドウ・サテン・ベベル (滑らか / ジゼル / 浮き彫り / ピロー) は Photoshop で測った形。シャドウ・光彩・サテンの輪郭 (被覆率を写す曲線) も描く (ベベルの光沢輪郭は未対応)。グラデーションの光彩は外側のみ測定済み。ぼかしたマスクの縁の境界線は近似 |
+| 調整レイヤ | 🟡 | レベル補正 / トーンカーブ / 明るさ・コントラスト / 露光量 / 色相・彩度 / 自然な彩度 / カラーバランス / 特定色域の選択 / チャンネルミキサー / レンズフィルター / 白黒 / グラデーションマップ / 反転 / ポスタリゼーション / 2 階調化。カラールックアップは未対応 (stats に数える)。レベル補正・トーンカーブ・明るさ・コントラスト・露光量・色相・彩度・カラーバランス・レンズフィルター・特定色域の選択 (相対 / 絶対)・自然な彩度の「彩度」は Photoshop と数 / 255 以内。自然な彩度の「自然な彩度」は小さい値でほぼ一致、±100 では 25 / 255 ほどずれる |
+
+psd-tools のテスト素材 (Photoshop が保存した合成画像つき) 220 ファイル中 199 が
+1% 以内で一致 (調整レイヤ・効果を含む)。合わないのは主にディザ合成、ノイズ
+グラデーション、ぼかした形の縁の境界線、大きな値の「自然な彩度」。
+
+Photoshop を正解にした検証: `tools/ps_oracle.py` が Photoshop (COM) に色見本 +
+調整レイヤの PSD を作らせ、`tests/test_ps_oracle.py` が `PSDPARSE_PS_ORACLE` の
+フォルダで比べる (Windows + Photoshop が必要。ファイルはリポジトリに入れない)。
+
+---
+
+## レイヤ属性
+
+| 属性 | 状況 | API |
+|---|:---:|---|
+| 位置/サイズ (bbox, width, height) | ✅ | `top/left/bottom/right`, `width`, `height` |
+| ブレンドモード | ✅ | `blend_mode` (enum), `blend_mode_key` |
+| 不透明度 / 塗り不透明度 | ✅ | `opacity`, `fill_opacity` |
+| クリッピング | ✅ | `clipping` |
+| 可視/ロック等フラグ | ✅ | `visible`, `transparency_protected`, `obsolete`, `pixel_data_irrelevant` |
+| レイヤ名 (raw / Unicode) | ✅ | `name`, `name_unicode` |
+| レイヤ ID | ✅ | `layer_id` |
+| レイヤ種別 | ✅ | `layer_type` (NORMAL/HIDDEN/FOLDER/ADJUST/FILL/TEXT) |
+| **フォルダ階層 (親子)** | ✅ | `parent_index` (v0.3.0) |
+| チャンネル構成 (id/length) | ✅ | `channels[]` |
+| シートカラー (レイヤパネルの色ラベル, `lclr`) | ✅ | `layer.sheet_color` (`{index,name}`, v0.6.0) |
+
+## レイヤマスク / ブレンド範囲
+
+| 機能 | 状況 | API |
+|---|:---:|---|
+| マスク矩形/フラグ/既定色 | ✅ | `layer.mask` (v0.3.0) |
+| real/user mask (size>=36) | ✅ | `layer.mask["real"]` (v0.6.0 でオフセット 1 byte ずれを修正) |
+| density / feather | ✅ | `layer.mask` の `user_density`/`user_feather`/`vector_density`/`vector_feather` (v0.6.0) |
+| ベクタマスク (`vmsk`/`vsms`) | ✅ | `layer.vector_mask` (反転 / リンク解除 / 無効、サブパスの開閉・合成方法、knot と制御点を文書ピクセルで)。0.13.0。読み取りのみ |
+| パスのラスタライズ | ✅ | `shape_mask(i, part)` (塗り / 線 / 両方の被覆率)、`psdparse.flatten_path` / `rasterize_path` / `stroke_path` (任意のパス)。C API は `psdfx_fill_path` / `psdfx_stroke_path` / `psdfx_flatten_subpath`。0.13.0 |
+| 保存パス (2000〜2997) / 作業パス (1025) | ✅ | `PSDFile.paths` (`unicode_name` は `pths` ブロックから)。0.13.0。読み取りのみ |
+| ブレンディングレンジ ("Blend If") | ✅ | `layer.blending_ranges` (raw 32bit packed) |
+
+## テキストレイヤ
+
+| 機能 | 状況 | 備考 |
+|---|:---:|---|
+| 本文 / 縦横 / 変換行列 | ✅ | `layer.text` (`text`/`orientation`/`transform`) |
+| ラン単位スタイル (font/size/color/tracking/kerning) | ✅ | `text["runs"]` |
+| 疑似ボールド / 疑似イタリック / 下線 | ✅ | `text["runs"]` の `bold`/`italic`/`underline` (FauxBold/FauxItalic/Underline, v0.9.0) |
+| 段落別の行揃え | ✅ | `text["paragraphs"]` (v0.2.2) |
+| 配置 (変換行列) / 流し込み枠 | ✅ | `text["transform"]` / `text_transform(i)` / `text_bounds(i)` |
+| **本文の編集 (save)** | ✅ | `set_text(i, str)` — EngineData を byte-exact に再直列化 (v0.7.0)。スタイルは先頭ランに畳まれる |
+| **ラン単位スタイルの編集** | ✅ | `set_run_style(i, run, size_px=/color=/tracking=/kerning=/bold=/italic=/underline=)` (v0.7.0)、`font=` (v0.10.0) |
+| リッチテキスト差し替え / 行揃え / フォント変更 / 配置 / 枠 | ✅ | 上の「編集して保存」表を参照 (v0.10.0) |
+| Txt2 の本文 / ラン長の追随 | ✅ | 既定で `set_text` / `set_rich_text` が Txt2 も書き換える (v0.12.0)。`text_engine_texts()` で中身を確認できる |
+| Txt2 の書式 (スタイルシート) の追随 | ❌ | 数値エイリアスのシートを作り直す必要があるため。書式が変わる編集では Txt2 を削除して TySh へ倒す |
+| テキストレイヤのラスタ再生成 | ❌ | psdparse も **Photoshop も開いただけでは描き直さない**。Photoshop 側で各テキストレイヤを小突く必要がある (psdtext の `tools/update-text-layers.jsx` 参照) |
+| ワープ (warp) | 🟡 | 読み取りのみ: `text["warp"]` (`style` / `value` / `horizontal_distortion` / `vertical_distortion` / `rotate`)。0.13.0。編集時はバイト列のまま保存される |
+| 非 RGB の FillColor | ❌ | `/Type 1` (RGB) のみ |
+| 行送り / ベースラインシフト / 取り消し線 / 大文字化 / 上付き・下付き / 比率 / 合字 | ✅ | 読み: `text["runs"]` の `leading` (None = 自動) / `baseline_shift` / `strikethrough` / `font_caps` / `font_baseline` / `horizontal_scale` / `vertical_scale` / `ligatures`。書き: `set_run_style(..., leading=, ...)` と `set_rich_text` の runs。0.13.0 |
+| 段落インデント / 段落前後のアキ / 自動行送り / ハイフネーション | ✅ | 読み: `text["paragraphs"]`。書き: `set_paragraph_style(i, para_index, ...)` と `set_rich_text` の paragraphs。0.13.0 |
+
+## Descriptor ブロック (v0.4.0)
+
+Photoshop の汎用ディスクリプタで格納されるブロックを dict 化して取得。
+
+| 機能 | 状況 | API |
+|---|:---:|---|
+| レイヤー効果 (`lfx2`, object-based) | ✅ | `layer.effects` (nested descriptor dict) |
+| 旧レイヤー効果 (`lrFX`, binary) | ✅ | `layer.legacy_effects` = `{種類: 値}` (共通 / ドロップシャドウ / シャドウ (内側) / 光彩 (外側・内側) / ベベル / 塗り)。0.13.0。読み取りのみ。新しいファイルは同じ効果を `lfx2` にも持ち、Photoshop はそちらを使う |
+| 塗りつぶしレイヤ (`SoCo`/`GdFl`/`PtFl`) | ✅ | `layer.fill` (`{type, data}`) |
+| 任意キーの descriptor 取得 | ✅ | `layer.descriptor(key, skip)` / `layer.info_keys` |
+
+`effects` / `fill` は **生 descriptor を辞書化したもの** で、効果ごとの型付き
+アクセサ (drop shadow の angle/distance を名前で、等) はまだありません。値の
+マッピング規則は [PYTHON_API.md](PYTHON_API.md#descriptor-blocks) を参照。
+
+## 調整レイヤ / 塗りつぶし / スマートオブジェクト / シェイプ
+
+| 機能 | 状況 | 備考 |
+|---|:---:|---|
+| 調整レイヤの種別判定 | ✅ | `layer_type == ADJUST` |
+| 調整レイヤのパラメータ | ✅ | `layer.adjustment` = `{type, key, ...}`。バイナリ形式 (レベル補正 / トーンカーブ / 色相・彩度 / カラーバランス / 明るさ・コントラスト / 特定色域 / 2 階調化 / ポスタリゼーション / 階調の反転 / チャンネルミキサー / レンズフィルター / 露光量 / グラデーションマップ) は名前付きの値に、descriptor 形式 (自然な彩度 / 白黒 / カラールックアップ) は `descriptor` に。0.13.0。読み取りのみ |
+| スマートオブジェクトの配置 (`SoLd`/`SoLE`/`PlLd`) | ✅ | `layer.smart_object` (uuid、四隅の変形、元の大きさ、ページ、スマートフィルタの有無、対応する埋め込みファイル)。0.13.0。生の descriptor は `descriptor("SoLd")` |
+| スマートオブジェクト埋め込みデータ抽出 (`lnk2`/`lnk3`/`lnkD`/`lnkE`) | ✅ | `PSDFile.linked_files` (埋め込み / 外部 / エイリアス、名前、種別、大きさ) と `linked_file_data(添字 or uuid)` で中身のバイト列。中身は要求時に読む (巨大でも一覧は軽い)。0.13.0 |
+| ベクタストローク/シェイプ (`vstk`/`vscg`/`vogk`) | ✅ | `layer.shape` (塗りの種類、線の幅・位置・端・角・破線・不透明度・塗り、元の形)。C++ は `decodeShape`。0.13.0。生 descriptor は `descriptor()` でも取れる |
+| ライブシェイプ情報 (origination) | ✅ | `layer.shape["origins"]` (矩形 / 角丸矩形と半径 / 直線の始点・終点 / 楕円、外接矩形)。0.13.0 |
+
+---
+
+## Image Resources / 文書メタデータ
+
+| リソース | 状況 | API |
+|---|:---:|---|
+| 解像度 (1005) | ✅ | `header.hres/vres` |
+| グリッド & ガイド (1032) | ✅ | `PSDFile.guides` (v0.3.0) |
+| スライス (1050 v6) | ✅ | `PSDFile.slices` (v0.3.0) |
+| スライス (1050 v7/v8, descriptor) | ✅ | `PSDFile.slices` (v6 と同じ形に写す。`version` で区別、0.13.0) |
+| 注釈 (`Anno`) | ✅ | `PSDFile.annotations` (テキスト本文、作者、位置、色。音声は大きさのみ。0.13.0) |
+| アートボード (`artb` / `artd` / `abdd`) | ✅ | `layer.artboard` (矩形、プリセット名、背景、色。0.13.0) |
+| レイヤーカンプ (1065, 文書レベル) | ✅ | `PSDFile.layer_comps` (id/name/comment/record_*, v0.3.0) |
+| レイヤーカンプの各レイヤ状態 (可視) | ✅ | `layer.comp_states` = `{comp_id: {enabled, offset_x, offset_y}}` (v0.7.x)。位置/効果の上書きは未適用 |
+| インデックスカラーパレット (色/count/透明index) | ✅ | `PSDFile.color_table` (v0.3.0) |
+| ICC プロファイル (1039) | ✅ | `PSDFile.icc_profile` (生バイト, v0.5.0) |
+| EXIF (1058) | ✅ | `PSDFile.exif` (生バイト, v0.5.0) |
+| XMP メタデータ (1060) | ✅ | `PSDFile.xmp` (UTF-8 str, v0.5.0) |
+| サムネイル (1036/1033) | ✅ | `PSDFile.thumbnail` (JPEG bytes + 寸法, v0.5.0) |
+| 任意リソースの生バイト | ✅ | `PSDFile.image_resource(id)` / `image_resource_ids` (v0.5.0) |
+| 上記の内容デコード (EXIF タグ解析等) | ❌ | 生バイトを返すのみ。解析は利用側 (Pillow 等) で |
+| アルファ / スポットチャンネル (1006 / 1045 / 1077) | ✅ | `PSDFile.alpha_channels` (名前、種類、表示色、不透明度) と `merged_channel(plane)` で画素 (0.13.0) |
+| パターン (`Patt` / `Pat2` / `Pat3`) | ✅ | `PSDFile.patterns` と `pattern_image(添字 or id)` で BGRA (0.13.0) |
+| バージョン情報 / その他 | 📦→✅ | `image_resource(id)` で生バイト取得可 |
+| Global layer mask info | ✅ | `PSDFile.global_layer_mask` (overlay 色/opacity/kind, v0.6.0) |
+
+---
+
+## まとめ (一言で)
+
+- **得意 (参照)**: レイヤ列挙 + 属性 + 階層 + 色ラベル、RGB/CMYK/Gray/Indexed/Lab/
+  Duotone のピクセル取得、テキストのラン単位スタイル、マスクの density/feather、
+  レイヤー効果/塗りの descriptor、文書メタデータ (ガイド/スライス/カンプ/global
+  layer mask) と image resource の生バイト (ICC/EXIF/XMP/サムネイル)、そして
+  **byte-identical なラウンドトリップ**。
+- **得意 (編集, v0.10.0)**: レイヤの追加/削除/並べ替え (フォルダは塊のまま移動)
+  /複製/他ファイルコピー、画素・マスク画素・パラメータ・改名・fill opacity の
+  編集、効果 (lfx2) の byte-exact な編集、テキスト (本文 / ラン単位スタイル /
+  リッチテキスト / 行揃え / フォント / 配置 / 流し込み枠) の編集、ゼロからの
+  新規作成。未編集部分は byte-identical を維持。編集 API は C++ / Python の
+  どちらからも同じことができます。
+- **再合成 (0.13.0)**: レイヤからの文書合成 (`composite`) とレイヤ 1 枚の効果込み
+  描画 (`render_layer`)。描画処理は C API `psdfx` として単体でも使える。
+- **未対応/限定的**: Multichannel ピクセル、調整レイヤの編集、ベクタ
+  パスの編集、スマートオブジェクトの差し替え、テキストの描画、
+  テキストの warp の編集と非 RGB の塗り色。画素編集は 8bit RGB のみ。
+- Lab は標準 D65 CIELAB→sRGB 近似 (Photoshop の D50 とは彩度の高い色でわずかに差)。
+- image resource の**中身の解釈** (EXIF タグ, サムネイル描画等) は行わず生バイトを
+  返すのみ。

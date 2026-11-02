@@ -1,0 +1,3 @@
+// toml.dll: Scripts.tomlDecodeFromStorage(storage) -> Dictionary (src/toml.cpp).
+function compat_shim_toml() { Scripts.tomlDecodeFromStorage = CompatNative.tomlDecodeFromStorage; }
+compat_shim("toml.dll", compat_shim_toml);

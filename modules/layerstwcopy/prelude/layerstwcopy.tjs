@@ -1,0 +1,8 @@
+// layerStwCopy.dll: its only export is Layer.stitchWrappedCopy (src/stitch.cpp).
+class CompatLayerStwMembers {
+	function stitchWrappedCopy(dx, dy, dw, dh, src, sx, sy, sw, sh, arr) {
+		return CompatNative.stitchWrappedCopy(this, dx, dy, dw, dh, src, sx, sy, sw, sh, arr);
+	}
+}
+function compat_shim_layerstwcopy() { CompatNative.attachMembers(CompatLayerStwMembers, Layer); }
+compat_shim("layerstwcopy.dll", compat_shim_layerstwcopy);

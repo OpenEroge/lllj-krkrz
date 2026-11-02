@@ -1,0 +1,16 @@
+// -storagetrace=yes: log every Storages.addAutoPath/removeAutoPath call with
+// its TJS call stack (the native side logs scans and rebuilds).
+if (System.getArgument("-storagetrace") == "yes") {
+	global.compat_originalAddAutoPath = Storages.addAutoPath;
+	global.compat_originalRemoveAutoPath = Storages.removeAutoPath;
+	function compat_traceAddAutoPath(path) {
+		compat_log("paths: add " + path + " " + Scripts.getTraceString());
+		return compat_originalAddAutoPath(path);
+	}
+	function compat_traceRemoveAutoPath(path) {
+		compat_log("paths: remove " + path + " " + Scripts.getTraceString());
+		return compat_originalRemoveAutoPath(path);
+	}
+	Storages.addAutoPath = compat_traceAddAutoPath;
+	Storages.removeAutoPath = compat_traceRemoveAutoPath;
+}

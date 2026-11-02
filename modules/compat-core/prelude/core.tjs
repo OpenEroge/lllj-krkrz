@@ -1,0 +1,91 @@
+// compat-core prelude. Runs first, once, at VM init (after the engine's
+// SysInitScript, before startup.tjs). It provides what the other preludes use:
+//
+//   compat_log(msg)                  "(compat) msg" in the engine log
+//   compat_mapDll(dll, plugin)       Plugins.link(dll) links a static plugin instead
+//   compat_shim(dlls, func)          Plugins.link(dll) calls func() instead
+//   compat_nothing                   shim for DLLs whose features the engine has built in
+//   compat_stub(name, ret)           function that logs "stub: name" once, returns ret
+//   compat_stubs(obj, prefix, dict)  install stubs for members obj does not have
+//
+// TJS notes for prelude authors:
+//  - write global functions: functions stored in a Dictionary do NOT fall back
+//    to global for unqualified names;
+//  - "function(){} incontextof %[...]" is unreliable here, build closures with
+//    Scripts.eval("(function(){...})");
+//  - %[ a => 1 ] evaluates a; write %[ a: 1 ] or "a" => 1;
+//  - helper classes whose members CompatNative.attachMembers copies onto a
+//    native class must be named "...Members" (their constructor is skipped).
+
+// krkrz's SysInitScript defines "const kirikiriz_generic=1" (meaning "console
+// build"). PC games would then ignore Plugins.link and pick console code paths.
+try { delete global.kirikiriz_generic; } catch (e) {}
+if (typeof global.kirikiriz_generic != "undefined") {
+	try { global.kirikiriz_generic = 0; } catch (e) { CompatNative.log("(compat) cannot reset kirikiriz_generic: " + e.message); }
+}
+
+global.Compat = %[
+	dllMap : %[],   // lower-case DLL name -> static plugin name
+	shims : %[],    // lower-case DLL name -> function
+	loaded : %[],
+	warned : %[],
+	stubret : %[],
+	origLink : Plugins.link,
+	origUnlink : Plugins.unlink
+];
+
+function compat_log(m) { CompatNative.log("(compat) " + m); }
+
+function compat_stubhit(name) {
+	if (!Compat.warned[name]) { Compat.warned[name] = true; compat_log("stub: " + name); }
+	return Compat.stubret[name];
+}
+function compat_stub(name, ret) {
+	Compat.stubret[name] = ret;
+	return Scripts.eval("(function() { return global.compat_stubhit(\"" + name + "\"); })");
+}
+function compat_stubs(obj, prefix, dict) {
+	var keys = [];
+	keys.assign(dict);
+	for (var i = 0; i < keys.count; i += 2) {
+		var k = keys[i];
+		var t;
+		try { t = typeof obj[k]; } catch (e) { continue; } // e.g. instance-only property on a class
+		if (t == "undefined" || t == "void") obj[k] = compat_stub(prefix + "." + k, keys[i+1]);
+	}
+}
+
+function compat_link(name) {
+	var key = Storages.extractStorageName(name).toLowerCase();
+	if (Compat.loaded[key]) return;
+	var plugin = Compat.dllMap[key];
+	if (plugin !== void) {
+		Compat.loaded[key] = true;
+		Compat.origLink(plugin);
+		return;
+	}
+	var shim = Compat.shims[key];
+	if (shim !== void) {
+		Compat.loaded[key] = true;
+		compat_log("shim plugin: " + key);
+		shim();
+		return;
+	}
+	Compat.origLink(name);
+}
+function compat_unlink(name) {
+	var key = Storages.extractStorageName(name).toLowerCase();
+	// never unload shims or static plugins; unlinking one that was never
+	// linked is a no-op
+	if (Compat.loaded[key] !== void || Compat.shims[key] !== void || Compat.dllMap[key] !== void) return;
+	Compat.origUnlink(name);
+}
+Plugins.link = compat_link;
+Plugins.unlink = compat_unlink;
+
+function compat_mapDll(dll, plugin) { Compat.dllMap[dll.toLowerCase()] = plugin; }
+function compat_shim(names, func) {
+	if (typeof names == "String") names = [names];
+	for (var i = 0; i < names.count; i++) Compat.shims[names[i].toLowerCase()] = func;
+}
+function compat_nothing() {}

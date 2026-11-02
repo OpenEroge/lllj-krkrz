@@ -1,0 +1,58 @@
+# Top-level build: one executable made of
+#   engine/                the krkrz engine (hard fork, git submodule)
+#   vendor/krkr-plugins/   the krkrz plugins games link by DLL name
+#   modules/               game-independent compatibility modules
+#   games/<GAME>/          the game profile: picks modules, adds game glue
+# Replaces the krkrz_dev umbrella project; only what this build uses was kept.
+cmake_minimum_required(VERSION 3.20)
+
+set(KRKRZ_CORE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/engine)
+set(KRKRZ_PLUGIN_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vendor/krkr-plugins)
+set(TPSTUB_DIR ${KRKRZ_PLUGIN_DIR}/tp_stub)
+set(NCBIND_DIR ${KRKRZ_PLUGIN_DIR}/ncbind)
+set(SIMPLEBIND_DIR ${KRKRZ_PLUGIN_DIR}/simplebinder)
+
+set(GAME lllj CACHE STRING "game profile to build (a directory under games/)")
+
+# Plugins are looked up in these folders, first match wins. The game profile is
+# listed like a static plugin: the engine add_subdirectory()s it and reads
+# KRKRZ_SRC_ADD / KRKRZ_INC / KRKRZ_LIB_ADD back (modules/compat.cmake). It
+# creates no target, so the engine registers no plugin entry point for it.
+set(TVP_PLUGIN_FOLDERS ${KRKRZ_PLUGIN_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/games)
+# All plugins are linked statically into the executable.
+set(TVP_PLUGINS KAGParserEx csvParser getSample json layerExBTOA layerExImage
+    layerExRaster psdfile saveStruct scriptsEx shrinkCopy extrans extNagano
+    AlphaMovie layerExSave ${GAME})
+set(TVP_PLUGINS_STATIC ${TVP_PLUGINS})
+
+# Engine options this build always uses.
+set(KRKRZ_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(KRKRZ_USE_ELEMENTS OFF CACHE BOOL "" FORCE)
+set(KRKRZ_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+option(KRKRZ_DRAW_STATS "collect DrawThreadPool usage stats (atomic counters)" ON)
+
+# vcpkg manifest: the engine's vcpkg.json merged with those of movie-player and
+# the plugins. Must run before project(), which starts the manifest install.
+include(${KRKRZ_CORE_DIR}/cmake/MergeVcpkgManifest.cmake)
+set(_vcpkg_subdirs ${KRKRZ_CORE_DIR}/external/movie-player)
+foreach(_plugin IN LISTS TVP_PLUGINS)
+    foreach(_folder IN LISTS TVP_PLUGIN_FOLDERS)
+        if(EXISTS "${_folder}/${_plugin}")
+            list(APPEND _vcpkg_subdirs "${_folder}/${_plugin}")
+            break()
+        endif()
+    endforeach()
+endforeach()
+krkrz_merge_vcpkg_manifest(
+    BASE    "${KRKRZ_CORE_DIR}/vcpkg.json"
+    OUTPUT  "${CMAKE_BINARY_DIR}/vcpkg.json"
+    SUBDIRS ${_vcpkg_subdirs}
+    EXCLUDE "movie-player:glew" "movie-player:glfw3")  # movie-player samples only
+set(VCPKG_MANIFEST_DIR "${CMAKE_BINARY_DIR}" CACHE PATH "merged vcpkg manifest" FORCE)
+
+project(lllj_krkrz VERSION 1.0)
+
+# HarfBuzz for glyphware, shared by every user (cmake/CommonExternals.cmake).
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/CommonExternals.cmake)
+
+add_subdirectory(engine ${CMAKE_CURRENT_BINARY_DIR}/core)

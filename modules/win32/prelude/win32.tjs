@@ -1,0 +1,170 @@
+// Windows-only facilities games expect, for the SDL (generic) engine build.
+// Everything here either reproduces what the game would see on Windows or
+// reports the facility as absent in the way the original DLL/API does.
+
+// Win32-only core APIs missing from the generic (SDL) build
+compat_stubs(System, "System", %[ readRegValue: void, writeRegValue: void ]);
+
+// Scripts commonly derive the Windows version from System.getOSVersion (or a
+// "Windows ..." osName). Report Windows 10, the common target: code paths for
+// Media Foundation movies then pick H.264 .mp4 files and the overlay presenter.
+function compat_getOSVersion() { return %[ major: 10, minor: 0, build: 19045 ]; }
+if (typeof System.getOSVersion == "undefined") System.getOSVersion = compat_getOSVersion;
+
+// built into the engine already (Vorbis / Opus decoders, movie decoders, ...)
+compat_shim(["wuvorbis.dll", "wuopus.dll", "krmovie.dll", "kagexopt.dll", "lzfs.dll", "yuzuex.dll"], compat_nothing);
+
+function compat_shim_getlangname() {
+	compat_stubs(System, "System", %[ getCurrentUILangName: "ja", getUserDefaultUILanguage: 0x411,
+		getSystemDefaultUILanguage: 0x411 ]);
+}
+compat_shim("getlangname.dll", compat_shim_getlangname);
+
+function compat_shim_win32dialog() {
+	var c = ["WS_BORDER", 0x00800000, "WS_TABSTOP", 0x00010000, "WS_VSCROLL", 0x00200000,
+		"WS_CHILD", 0x40000000, "WS_VISIBLE", 0x10000000, "WS_GROUP", 0x00020000,
+		"CBS_DROPDOWN", 2, "CBS_DROPDOWNLIST", 3, "ES_LEFT", 0, "LBS_NOTIFY", 1, "LVS_REPORT", 1,
+		"TBS_AUTOTICKS", 1, "TBS_HORZ", 0, "IDOK", 1, "IDCANCEL", 2, "IDYES", 6, "IDNO", 7,
+		"WS_CAPTION", 0x00C00000, "WS_DLGFRAME", 0x00400000, "WS_POPUP", 0x80000000, "WS_SYSMENU", 0x00080000,
+		"WS_THICKFRAME", 0x00040000, "WS_MAXIMIZEBOX", 0x00010000, "WS_MINIMIZEBOX", 0x00020000,
+		"WS_OVERLAPPEDWINDOW", 0x00CF0000, "WS_EX_APPWINDOW", 0x40000, "WS_EX_DLGMODALFRAME", 1,
+		"WS_EX_TOOLWINDOW", 0x80, "WS_EX_WINDOWEDGE", 0x100, "GWL_STYLE", -16, "GWL_EXSTYLE", -20,
+		"DS_SHELLFONT", 0x48, "DS_MODALFRAME", 0x80, "DS_SETFONT", 0x40, "DS_CENTER", 0x800];
+	for (var i = 0; i < c.count; i += 2) {
+		WIN32Dialog[c[i]] = c[i+1];
+		if (typeof global[c[i]] == "undefined") global[c[i]] = c[i+1];
+	}
+	WIN32Dialog.Header = %[];
+	WIN32Dialog.Items = %[];
+}
+// win32dialog.dll: no native dialogs here, every dialog is "cancelled"
+class WIN32Dialog {
+	var owner;
+	var modeless = false;
+	function WIN32Dialog(owner) { this.owner = owner; }
+	function finalize() {}
+	function open(win) { compat_stubhit("WIN32Dialog.open"); return 2; }
+	function close(r) {}
+	function store() {}
+	function makeTemplate() {}
+	function getItem() { return 0; }
+	function getItemText() { return ""; }
+	function setItemText() {}
+	function getItemInt() { return 0; }
+	function setItemInt() {}
+	function setItemEnabled() {}
+	function getItemEnabled() { return true; }
+	function sendItemMessage() { return 0; }
+	function messageBox() { return 2; }
+	function _getValue() { return void; }
+	function _setValue() {}
+	function removeAllBitmap() {}
+	function getBaseUnits() { return %[ h:8, v:16 ]; }
+	function getItemLong() { return 0; }
+	function setItemLong() {}
+	function getNamedId(n) { return 0; }
+	function idFrom() { return 0; }
+	function invalidateAll() {}
+	function setPos() {}
+	function setSize() {}
+	function maximize() {}
+	function restoreMaximize() {}
+	function addBitmap() { return 0; }
+}
+compat_shim_win32dialog();
+compat_shim("win32dialog.dll", compat_nothing);
+
+function compat_monitor() {
+	var w = System.screenWidth, h = System.screenHeight;
+	var r = %[ x:0, y:0, w:w, h:h, width:w, height:h, left:0, top:0, right:w, bottom:h ];
+	return %[ monitor:r, work:r, primary:true, name:"Compat", dpi:96 ];
+}
+function compat_monitors() { return [ compat_monitor() ]; }
+// Window members added by windowEx.dll (attached to the native Window class)
+class CompatWindowExMembers {
+	function compat_get(n, d) { return (typeof this[n] != "undefined") ? this[n] : d; }
+	property maximizeBox { getter() { return compat_get("_compat_maxbox", true); } setter(v) { this._compat_maxbox = v; } }
+	property minimizeBox { getter() { return compat_get("_compat_minbox", true); } setter(v) { this._compat_minbox = v; } }
+	property exSystemMenu { getter() { return compat_get("_compat_exsysmenu", void); } setter(v) { this._compat_exsysmenu = v; } }
+	property enableNCMouseEvent { getter() { return compat_get("_compat_ncmouse", false); } setter(v) { this._compat_ncmouse = v; } }
+	function resetWindowIcon() {}
+	function setWindowIcon() {}
+	function setOverlayBitmap() {}
+	function resetExSystemMenu() {}
+	function ncHitTest() { return 1; }
+	function focusMenuByKey() {}
+	function setMessageHook() {}
+	function bringTo() {}
+	function sendToBack() {}
+	function acquireImeControl() {}
+	function resetImeContext() {}
+	function setWindowCornerPreference() {}
+	function getNotificationNum() { return 0; }
+	function getNotificationName() { return ""; }
+	function registerExEvent() {}
+	function registerHotKey() { return true; }
+	function unregisterHotKey() { return true; }
+}
+function compat_shim_windowex() {
+	if (typeof System.getDisplayMonitors == "undefined") System.getDisplayMonitors = compat_monitors;
+	if (typeof System.getMonitorInfo == "undefined") System.getMonitorInfo = compat_monitor;
+	compat_stubs(System, "System", %[
+		setDpiAwareness: 0, getCursorPos: void, setCursorPos: void, setClipCursor: void,
+		getSystemMetrics: 0, readEnvValue: "", expandEnvString: "", setApplicationIcon: void,
+		setIconicPreview: void, getDoubleClickTime: 500, findWindowEx: 0, classLongPtr: 0,
+		loadCursor: 0, mapVirtualKey: 0, breathe: void, isBreathing: false,
+		clearGraphicCache: void, getAboutString: "", getCPUType: "" ]);
+	var n = CompatNative.attachMembers(CompatWindowExMembers, Window);
+	compat_log("windowEx: attached " + n + " Window members");
+	var consts = ["nchtError", -2, "nchtTransparent", -1, "nchtNoWhere", 0, "nchtClient", 1, "nchtCaption", 2,
+		"nchtSysMenu", 3, "nchtSize", 4, "nchtGrowBox", 4, "nchtMenu", 5, "nchtHScroll", 6, "nchtVScroll", 7,
+		"nchtMinButton", 8, "nchtReduce", 8, "nchtMaxButton", 9, "nchtZoom", 9, "nchtLeft", 10, "nchtRight", 11,
+		"nchtTop", 12, "nchtTopLeft", 13, "nchtTopRight", 14, "nchtBottom", 15, "nchtBottomLeft", 16,
+		"nchtBottomRight", 17, "nchtBorder", 18];
+	for (var i = 0; i < consts.count; i += 2) if (typeof Window[consts[i]] == "undefined") Window[consts[i]] = consts[i+1];
+}
+compat_shim("windowex.dll", compat_shim_windowex);
+
+// MenuItem (below) is defined unconditionally; menu.dll itself has nothing else to add
+compat_shim("menu.dll", compat_nothing);
+
+compat_shim(["drawdeviced2d.dll"], compat_nothing);
+compat_shim("k2compat.dll", compat_nothing);
+compat_shim(["httprequest.dll", "win32ole.dll", "shellexecute.dll", "process.dll",
+		   "messenger.dll", "addfont.dll"], compat_nothing);
+
+
+// Minimal MenuItem replacement (no native menus on this platform)
+class MenuItem {
+	var children = [];
+	var parent;
+	var caption = "";
+	var checked = false;
+	var enabled = true;
+	var visible = true;
+	var group = 0;
+	var radio = false;
+	var shortcut = "";
+	var rightJustify = false;
+	var bmpItem = 0;
+	var bmpChecked = 0;
+	var bmpUnchecked = 0;
+	var index = 0;
+	var owner;
+	function MenuItem(owner, caption) { this.owner = owner; if (caption !== void) this.caption = caption; }
+	function finalize() {}
+	function add(item) { item.parent = this; item.index = children.count; children.add(item); }
+	function insert(item, idx) { item.parent = this; children.insert(idx, item); }
+	function remove(item) { children.remove(item); }
+	function popup() {}
+	function popupEx() { return 0; }
+	property root { getter() { return parent === void ? this : parent.root; } }
+	property HMENU { getter() { return 0; } }
+	property window { getter() { return owner; } }
+}
+// MenuItemEx (windowEx) bitmap ids
+{
+	var c = ["biSystem", 1, "biRestore", 2, "biMinimize", 3, "biClose", 5, "biCloseDisabled", 6,
+		"biMinimizeDisabled", 7, "biPopupClose", 8, "biPopupRestore", 9, "biPopupMaximize", 10, "biPopupMinimize", 11];
+	for (var i = 0; i < c.count; i += 2) MenuItem[c[i]] = c[i+1];
+}

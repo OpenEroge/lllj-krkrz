@@ -1,0 +1,24 @@
+{
+    "version": 2,
+    "configurePresets": [
+        {
+            "name": "linux-x64",
+            "displayName": "Linux x64 (vcpkg static deps)",
+            "generator": "Ninja Multi-Config",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_CXX_STANDARD": "17",
+                "CMAKE_CXX_STANDARD_REQUIRED": "ON",
+                "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+                "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/toolchains/linux.cmake",
+                "VCPKG_CRT_LINKAGE": "dynamic",
+                "VCPKG_LIBRARY_LINKAGE": "static",
+                "VCPKG_TARGET_TRIPLET": "x64-linux",
+                "VCPKG_TARGET_ARCHITECTURE": "x64"
+            }
+        }
+    ],
+    "buildPresets": [
+        { "name": "linux-x64", "configurePreset": "linux-x64", "configuration": "Release" }
+    ]
+}

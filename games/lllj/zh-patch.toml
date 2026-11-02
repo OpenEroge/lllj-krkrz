@@ -1,0 +1,181 @@
+# Chinese patch (lllj_zh.exe / lllj_zh.dll), read by modules/xpck-patch.
+#
+# lllj_zh.dll is a Detours hook DLL whose behaviour is driven by a JSON config
+# embedded in its resources (RVA 0x29b0f0). This is that config, translated to
+# TOML, limited to what applies on Linux:
+#   PatchPacks          -> pack
+#   Multilang.RedirectTable (Map[jp, cn, tw], "Eval" 0/1) -> [[redirect]]
+#   Subtitles / SubtitleFonts -> [[subtitles]] / [[subtitle_fonts]]
+# SaveDataPath ("savedata_zh") is applied by the launcher (game.conf). The other
+# hooks (code page 932, TaskDialog, window icon, DRM checks) are Windows only.
+
+option = "lllj_zh"     # -lllj_zh=no: Japanese game; -lllj_zh=<path>: pack location
+pack = "lllj_zh.pck"   # default: next to the executable
+
+# Language expressions, evaluated on the main thread: 0 jp, 1 cn (simplified), 2 tw.
+[languages]
+# DLL "Eval":0
+text = '(typeof kag == "Object") ? kag.languageType : 0'
+# DLL "Eval":1 (plain SystemConfig.uiLanguageType). Lookups here also come from
+# existence checks, some while kag is being built; the patch's getter returns 0
+# (no redirect) without kag, so it is skipped until then.
+ui = '(typeof kag == "Object" && typeof SystemConfig == "Object") ? SystemConfig.uiLanguageType : void'
+
+# from = bare file name; to = [jp, cn, tw] ("" = unchanged)
+[[redirect]]
+from = "title_bg.mtn"
+to = ["", "title_bg_cn.mtn", "title_bg_cn.mtn"]
+language = "ui"
+
+[[redirect]]
+from = "title_bg1.mtn"
+to = ["", "title_bg1_cn.mtn", "title_bg1_cn.mtn"]
+language = "ui"
+
+[[redirect]]
+from = "title_bg2.mtn"
+to = ["", "title_bg2_cn.mtn", "title_bg2_cn.mtn"]
+language = "ui"
+
+[[redirect]]
+from = "title_bg3.mtn"
+to = ["", "title_bg3_cn.mtn", "title_bg3_cn.mtn"]
+language = "ui"
+
+[[redirect]]
+from = "title_bg4.mtn"
+to = ["", "title_bg4_cn.mtn", "title_bg4_cn.mtn"]
+language = "ui"
+
+[[redirect]]
+from = "title_bg5.mtn"
+to = ["", "title_bg5_cn.mtn", "title_bg5_cn.mtn"]
+language = "ui"
+
+[[redirect]]
+from = "title_bg6.mtn"
+to = ["", "title_bg6_cn.mtn", "title_bg6_cn.mtn"]
+language = "ui"
+
+[[redirect]]
+from = "title_bg7.mtn"
+to = ["", "title_bg7_cn.mtn", "title_bg7_cn.mtn"]
+language = "ui"
+
+[[redirect]]
+from = "title_bg_trial.mtn"
+to = ["", "title_bg_trial_cn.mtn", "title_bg_trial_cn.mtn"]
+language = "ui"
+
+[[redirect]]
+from = "op.ass"
+to = ["", "op_chs.ass", "op_cht.ass"]
+language = "text"
+
+[[redirect]]
+from = "ed1_ena.ass"
+to = ["", "ed1_ena_chs.ass", "ed1_ena_cht.ass"]
+language = "text"
+
+[[redirect]]
+from = "ed2_anj.ass"
+to = ["", "ed2_anj_chs.ass", "ed2_anj_cht.ass"]
+language = "text"
+
+[[redirect]]
+from = "ed3_tsu.ass"
+to = ["", "ed3_tsu_chs.ass", "ed3_tsu_cht.ass"]
+language = "text"
+
+[[redirect]]
+from = "ed4_rir.ass"
+to = ["", "ed4_rir_chs.ass", "ed4_rir_cht.ass"]
+language = "text"
+
+[[redirect]]
+from = "ed5_mik.ass"
+to = ["", "ed5_mik_chs.ass", "ed5_mik_cht.ass"]
+language = "text"
+
+[[redirect]]
+from = "ed6_nay.ass"
+to = ["", "ed6_nay_chs.ass", "ed6_nay_cht.ass"]
+language = "text"
+
+[[redirect]]
+from = "edg_gra.ass"
+to = ["", "edg_gra_chs.ass", "edg_gra_cht.ass"]
+language = "text"
+
+[[redirect]]
+from = "mv1.ass"
+to = ["", "mv1_chs.ass", "mv1_cht.ass"]
+language = "text"
+
+[[redirect]]
+from = "mv2.ass"
+to = ["", "mv2_chs.ass", "mv2_cht.ass"]
+language = "text"
+
+[[redirect]]
+from = "mv3.ass"
+to = ["", "mv3_chs.ass", "mv3_cht.ass"]
+language = "text"
+
+# movie leaf name -> subtitle script (then redirected as above)
+[[subtitles]]
+movie = "op.wmv"
+ass = "op.ass"
+
+[[subtitles]]
+movie = "op.mp4"
+ass = "op.ass"
+
+[[subtitles]]
+movie = "mv1.mp4"
+ass = "mv1.ass"
+
+[[subtitles]]
+movie = "mv2.mp4"
+ass = "mv2.ass"
+
+[[subtitles]]
+movie = "mv3.mp4"
+ass = "mv3.ass"
+
+[[subtitles]]
+movie = "ed1_ena.wmv"
+ass = "ed1_ena.ass"
+
+[[subtitles]]
+movie = "ed2_anj.wmv"
+ass = "ed2_anj.ass"
+
+[[subtitles]]
+movie = "ed3_tsu.wmv"
+ass = "ed3_tsu.ass"
+
+[[subtitles]]
+movie = "ed4_rir.wmv"
+ass = "ed4_rir.ass"
+
+[[subtitles]]
+movie = "ed5_mik.wmv"
+ass = "ed5_mik.ass"
+
+[[subtitles]]
+movie = "ed6_nay.wmv"
+ass = "ed6_nay.ass"
+
+[[subtitles]]
+movie = "edg_gra.wmv"
+ass = "edg_gra.ass"
+
+# registered with libass only
+[[subtitle_fonts]]
+family = "MO UDShinGo SC Gb4 DB"
+file = "MO-UDShinGo-SC-Gb4-DB.otf"
+
+[[subtitle_fonts]]
+family = "等距更纱黑体 SC SemiBold"
+file = "SarasaMonoSC-SemiBold.ttf"

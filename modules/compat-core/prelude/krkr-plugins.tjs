@@ -1,0 +1,17 @@
+// The vendored krkrz plugins (vendor/krkr-plugins/) are linked statically into
+// the executable under their registered names; games link them by DLL name.
+compat_mapDll("kagparserex.dll", "KAGParserEx");
+compat_mapDll("csvparser.dll", "csvParser");
+compat_mapDll("getsample.dll", "getSample");
+compat_mapDll("json.dll", "json");
+compat_mapDll("layerexbtoa.dll", "layerExBTOA");
+compat_mapDll("layereximage.dll", "layerExImage");
+compat_mapDll("layerexraster.dll", "layerExRaster");
+compat_mapDll("savestruct.dll", "saveStruct");
+compat_mapDll("scriptsex.dll", "scriptsEx");
+compat_mapDll("shrinkcopy.dll", "shrinkCopy");
+compat_mapDll("extrans.dll", "extrans");
+compat_mapDll("extnagano.dll", "extNagano");
+compat_mapDll("alphamovie.dll", "AlphaMovie");
+compat_mapDll("layerexsave.dll", "layerExSave");
+compat_mapDll("psd.dll", "psdfile");

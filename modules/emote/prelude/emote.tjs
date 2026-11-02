@@ -1,0 +1,5 @@
+// E-mote (motionplayer.dll) and PSBFile (psbfile.dll).
+// motion.tjs falls through to the nod3d variant when only its placeholder DLL
+// exists; the D3D variant is never selected. PSBFile is a built-in class.
+compat_mapDll("motionplayer_nod3d.dll", "compat_emote");
+compat_shim(["motionplayer.dll", "psbfile.dll"], compat_nothing);

@@ -1,0 +1,35 @@
+// Loaded by games/lllj/tests/audio_lock_stress.py into a -nostartup instance.
+// Restarts several labelled sounds just before their label, so every play
+// pushes a label event while the event thread is updating the buffers.
+// Label events are delivered to the buffer object itself.
+class LLLJLockStressWave extends WaveSoundBuffer {
+	function LLLJLockStressWave(owner) { super.WaveSoundBuffer(owner); }
+	function onLabel(name) { global.llljStress.labels++; }
+}
+var llljStress = %[ bufs:[], plays:0, labels:0 ];
+function llljStressTick() {
+	with (llljStress) {
+		for (var i = 0; i < .bufs.count; ++i) {
+			var b = .bufs[i];
+			b.stop();
+			b.position = .pos;
+			b.play();
+			.plays++;
+		}
+	}
+}
+function llljStressStart(file, count, pos, interval) {
+	Storages.addAutoPath(System.exePath + "sound/");
+	llljStress.pos = pos;
+	llljStress.owner = new Dictionary();
+	for (var i = 0; i < count; ++i) {
+		var b = new LLLJLockStressWave(llljStress.owner);
+		b.open(file);
+		llljStress.bufs.add(b);
+	}
+	var t = new Timer(llljStressTick, "");
+	t.interval = interval;
+	t.enabled = true;
+	llljStress.timer = t;
+	return llljStress.bufs.count;
+}

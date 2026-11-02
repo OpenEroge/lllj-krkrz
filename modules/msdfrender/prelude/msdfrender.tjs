@@ -1,0 +1,25 @@
+// msdfrender.dll: the Layer members behind MSDF/SDF atlas fonts
+// (prerenderfontex.tjs, embfontloader.tjs). Natives in src/msdfrender.cpp;
+// the argument lists are the DLL's.
+class CompatMsdfMembers {
+	function makeGlyphMSDF(param, x, y, w, h) {
+		return CompatNative.msdfMakeGlyph(this, false, param, x, y, w, h, void);
+	}
+	function makeGlyphSDF(param, x, y, w, h, province) {
+		return CompatNative.msdfMakeGlyph(this, true, param, x, y, w, h, province);
+	}
+	function makeBitmapFromProvince(x, y, w, h) {
+		return CompatNative.msdfBitmapFromProvince(this, x, y, w, h);
+	}
+	function operateGlyphToProvince(x, y, w, h, bitmap) {
+		return CompatNative.msdfOperateProvince(this, x, y, w, h, bitmap);
+	}
+	function getAscentHeight() {
+		return CompatNative.msdfAscentHeight(this);
+	}
+}
+function compat_shim_msdfrender() {
+	var n = CompatNative.attachMembers(CompatMsdfMembers, Layer);
+	compat_log("msdfrender: attached " + n + " Layer members");
+}
+compat_shim("msdfrender.dll", compat_shim_msdfrender);

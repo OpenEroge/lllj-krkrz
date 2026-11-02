@@ -1,0 +1,35 @@
+// PackinOne.dll: a bundle of older plugins plus the tjsDataPack save format.
+function compat_shim_packinone() {
+	var names = ["csvparser.dll", "layereximage.dll", "layerexraster.dll", "layerexbtoa.dll",
+				 "savestruct.dll", "scriptsex.dll", "shrinkcopy.dll", "fstat.dll", "proxyfs.dll"];
+	for (var i = 0; i < names.count; i++) compat_link(names[i]);
+	Scripts.loadDataPack = CompatNative.loadDataPack;
+	Scripts.saveDataPack = CompatNative.saveDataPack;
+	Scripts.makeDataPackDigest = CompatNative.makeDataPackDigest;
+	Scripts.makeDataPackThumb = compat_makeDataPackThumb;
+}
+compat_shim("packinone.dll", compat_shim_packinone);
+// PackinOne exports that games call without a guard (src/layer_extras.cpp).
+// Installed right away: scripts use them whether or not PackinOne is linked yet.
+Storages.saveOctet = CompatNative.saveOctet;
+Layer.fetchImageSize = CompatNative.fetchImageSize;
+System.getKnownFolderPath = CompatNative.getKnownFolderPath;
+// Save files are "<thumbnail image bytes><data pack>"; the thumbnail is made from the
+// layer the game passes in and returned as an octet for saveDataPack.
+function compat_makeDataPackThumb(layer, ext, quality, component) {
+	if (!(layer instanceof "Layer")) return void;
+	var e = (ext == "png") ? "png" : "jpg";
+	var tmp = System.dataPath + "compat_thumb_tmp." + e;
+	try {
+		layer.saveLayerImage(tmp, (e == "jpg" && quality !== void) ? ("jpg" + quality) : e);
+		return CompatNative.readOctet(tmp);
+	} catch (ex) {
+		compat_log("makeDataPackThumb: " + ex.message);
+	}
+	return void;
+}
+// fstat.dll: Storages.fstat / dirlist / ... are built into krkrz.
+compat_shim("fstat.dll", compat_nothing);
+// proxyfs.dll: no proxy storage media is registered. Advertising the map would make
+// scripts mount proxy:// only to redirect Windows movie DLLs.
+compat_shim("proxyfs.dll", compat_nothing);

@@ -1,0 +1,286 @@
+# 开发记录：批次 1–6
+
+这是移植从原型到“汉化 + 全功能”时的分批计划与验收记录，按时间保留，作为历史资料。
+原计划中的批次 7（60Hz 性能）和批次 8（全流程验收/打包）已取消。文中的路径
+（`plugins/lllj_compat/`、`patches/`、`tools/…`）是当时的布局，现在的位置见 `docs/architecture.md`。
+
+目标（批次 1–6 范围内均已达成）：
+1. **汉化**：日 / 简 / 繁可在游戏内切换，效果等同 Windows 下的 `lllj_zh.exe`（中文标题动画、正文、UI、OP/ED 字幕），去码 CG 生效。
+2. **全功能**：E-mote、视频、语音特效、所有转场/UI 特效、鉴赏模式、存读档、设置项都与 Wine 下原版一致，日志里没有未处理异常。
+
+---
+
+## 批次 1：基础设施、测量和小修
+
+目标：后面每一批都依赖的东西先补齐；把“看得见的小毛病”清掉。
+
+- [x] **帧率测量**：加 `LLLJNative` 或启动参数（如 `-lllj_fps=yes`），每秒输出实际呈现帧数、最长帧耗时、Layer 合成/上传/等待各占多少。
+      先看 krkrz 自带的 `KRKRZ_DRAW_STATS` 和 `-drawthread`，能复用就复用。记录当前基线（标题、对话、转场三个场景）。
+- [x] **自动化测试脚本**：把 `smoke.sh` 扩成场景脚本（TJS，经 REPL 或 `-replfile` 注入）：
+      Logo → 标题 → 新游戏推进 N 句 → backlog → 存/读档 → 鉴赏（CG/SD/音乐/立绘）→ 设置页每一页 → 回标题。每步截图 + 帧率记录。
+      用 `kag.process(storage, label)` 直接跳到指定场景，比点击稳定。
+- [x] **`Rebuilding Auto Path Table` 反复触发**（每次约 0.3 秒）：查是谁在运行时调用 `Storages.addAutoPath/removeAutoPath`
+      （在 prelude 里包一层打印调用栈 `Scripts.getTraceString()`），对症处理（缓存/改成只建一次/在引擎侧做增量重建）。
+- [x] **被捕获异常**清零：`uisupport.tjs SetupFullHDMovie`、`mainwindow.tjs onResize`、标题的 `affinesourceimage loadImages`（后者属批次 2，先确认原因）。
+- [x] **去码 CG**：`result/unencrypted/`（53 个 pimg）以最高优先级挂上。`initialize.tjs` 会依次挂 `patch2.xp3, patch3.xp3 …`（遇到第一个不存在的就停），
+      所以用 `tools/xp3plain.py` 打成 `game/patch2.xp3` 最省事；先验证“后挂的优先”。
+- [x] **16 个无名文件**：在存储查找失败时按 Hxv4 规则把文件名算成 BLAKE2s-256 的 64 字符十六进制名再查（算法在 `<游戏目录>/xp3tool/` 的 Rust 代码里），
+      或者干脆离线反查出名字后在 `game/` 里补 symlink。
+- [x] **存档目录**改成 `~/.local/share/limelight_lj/`（看 krkrz 的 `-datapath` / appconfig 机制），通过显式命令可选导入 `<游戏目录>/savedata_zh/`。
+      Windows 存档是 TJS/4s0 加密（iv = `System.title`），`loadDataPack` 已能解，需实测读档。
+- [x] 系统菜单/快捷键：全屏切换（Alt+Enter）、窗口缩放、右键菜单的替代品是否可用。
+
+验收：基线帧率数据写进本文件；smoke 日志里没有 `exception occured`（除批次 2/3/4 负责的）；去码 CG 在鉴赏模式可见。
+
+### 批次 1 验收记录（2026-11-02）
+
+- 完整回归：`artifacts/batch1-complete/report.json`（启动/Logo、推进 6 句、backlog、普通及快速存读档、鉴赏入口、10 个设置页、Alt+Enter、1280×720 缩放后真实点击、右键返回）。
+- Windows 存档：`artifacts/batch1-windows-complete/report.json`，按独立 Python 解码结果核对场景及 checkpoint 628，实际恢复 `savedata_zh/data_continue.jpg` 并推进，缩略图可读，来源 SHA-256 保持不变。
+- 资源：`artifacts/batch1-resources/report.json`，53 个 pimg 均解析到 `patch2.xp3` 且与来源 MD5 一致；16 个无名文件可读。真实原名未反查，运行时回退通过独立哈希向量和合成逻辑名测试。
+- 存储/容器/导入：`artifacts/batch1-storage-trace/report.json`，含 Release 调用栈、优先级、重复挂载、删除回退、负缓存、写入、compact、显式刷新、分段 JPEG 和截断拒绝。
+- 异常验收只接受已确认的 `.mtn` 加载与 `WaveSoundBuffer.StkFreeVerb` 调用点。`SetupFullHDMovie`、`onResize` 已消失。颜色轮盘和附加系统转场记录为批次 5 的 stub。
+- 存档格式补充：Windows JPEG 使用 APP11 分段（每段最多 16KiB 解码字节）及 `FF 00` 转义；直接从 `TJS/` 截到文件尾会误报 LZ4 损坏。已补容器解析和本作汉化存档 ID 兼容。
+
+### 1080p 基线
+
+同一 Release 构建，`KRKRZ_DRAW_STATS=ON`、drawthread=auto、dummy 音频；标题/对话各 30 秒，设置打开/返回共 10 轮。
+“旧索引”通过 `-lllj_index=no` 复现原有失效/全量重建行为，其余兼容修复相同；按顺序运行三组采样。
+Xvfb 为 llvmpipe（LLVM 23.1.3），真实桌面为 AMD Radeon 880M；两者均为 GLES 3.2 / Mesa 26.2.5。
+原始报告：`artifacts/batch1-measure-before/`、`artifacts/batch1-measure-after/`、`artifacts/batch1-measure-desktop/`。
+
+| 环境/索引 | 场景 | 采样(s) | Swap/s | 最长间隔(ms) | Layer(ms/s) | 上传(ms/s) | Swap耗时(ms/s) |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Xvfb/旧索引 | 标题（缺 E-mote） | 30.05 | 419.8 | 4.8 | 11.5 | 0.06 | 946.4 |
+| Xvfb/旧索引 | 对话 | 30.05 | 419.9 | 4.5 | 13.7 | 0.42 | 945.1 |
+| Xvfb/旧索引 | 10 轮转场 | 18.65 | 108.6 | 652.9 | 278.7 | 54.55 | 269.9 |
+| Xvfb/增量索引 | 标题（缺 E-mote） | 30.01 | 421.5 | 5.7 | 10.7 | 0.06 | 950.0 |
+| Xvfb/增量索引 | 对话 | 30.04 | 424.8 | 5.0 | 13.0 | 0.37 | 947.1 |
+| Xvfb/增量索引 | 10 轮转场 | 12.78 | 161.2 | 163.6 | 401.7 | 79.16 | 397.4 |
+| 桌面/增量索引 | 标题（缺 E-mote） | 30.01 | 119.9 | 16.8 | 2.5 | 0.01 | 995.1 |
+| 桌面/增量索引 | 对话 | 30.04 | 119.6 | 28.5 | 6.4 | 0.38 | 989.7 |
+| 桌面/增量索引 | 10 轮转场 | 13.34 | 97.1 | 216.4 | 404.2 | 57.32 | 384.0 |
+
+Layer 列是包含上传子项的完成阶段墙钟时间；Swap 耗时包含驱动等待/提交，各列不能相加当作独立 CPU 占比。
+计数代表完成的 Swap，不代表显示器 scanout 刷新率。标题/Logo/SD 的 E-mote 仍缺失，这些数值不构成全功能 60Hz 验收。
+
+10 轮转场中，目录扫描 **966 → 0**、索引重建 **21 → 0**；存档/设置写入仍是 20 次。
+Xvfb 总耗时 **18.65s → 12.78s**，最长呈现间隔 **652.9ms → 163.6ms**。
+真实桌面转场最长 **216.4ms**，仍需批次 7 处理布局、合成及资源加载卡顿。
+
+---
+
+## 批次 2：E-mote（motionplayer）
+
+目标：标题背景动画、yuzulogo/m2logo、eyecatch、SD 小剧场（`sdmotion/` 31 个 + patch 2 个，共 43 个 .mtn，PSB v4）全部正常且满帧。
+
+- [x] 移植 krkr-ns emoteplayer（MIT）到 `plugins/lllj_compat/emote/`，与上游的差异见其中 `UPSTREAM.txt`。
+      ncbind 绑定表原样保留（shim 让它用引擎内部头文件，类名私有化避免与静态插件合并）。
+      GL 后端（私有 SDL GL 上下文光栅化网格，读回 Layer）用于硬件 GL；软件 GL 或自检失败时用 CPU 光栅化；`-lllj_emote=cpu|gl` 可强制。
+- [x] 只放 `motionplayer_nod3d.dll` 占位，prelude 映射到静态插件 `lllj_emote`；不需要 `-nod3dm`。游戏实际走 `D3DAdaptor`（krkr-ns 的 CPU 读回实现）。
+- [x] 方法核对：`play/playTimeline/getMainTimelineLabelList/setVariable/setDrawAffineTranslateMatrix/serialize/progress/skipToSync` 均已实现。
+      `initPhysics`、`setTimelineBlendRatio`、wind 等只在 E-mote 角色文件（`_storageType=="emote"`，带 metadata 的 PSB）分支调用，本作没有这类资源，krkr-ns 中仍是空实现。
+- [x] 资源：43 个 `.mtn` 全是明文 PSB v4，脚本不调用 `setEmotePSBDecryptSeed`。
+- [x] 修正 krkr-ns：`loopTime` 是循环起点（SD 先播开场再循环）；变量切换参数化节点时子动画从头播放、参数化主动画时钟不钳制（eyecatch）；
+      补上粒子发射器（eyecatch 角色卡与泡泡、SD002/007/101/501），语义参照 [krkr2 motionplayer](https://github.com/2468785842/krkr2/tree/main/cpp/plugins/motionplayer) 的逆向实现。
+- [x] 与 Wine 原版视觉对照：`tools/emote_compare.py`（见下方验收记录）。原版在 Wine 下需 `-nod3dm=yes -used2d=no`（D3D 动画播放器、D2D 绘制设备在 Wine 中失败），
+      通过游戏自带的 CialloHook（镜像目录的 `unencrypted/` 覆盖 `custom.tjs`）注入同一份截图脚本 `tools/emote_compare.tjs`，两边用 KAG 的 `captureSnapshot` 在相同时间点截图。
+      遮罩/混合（eyecatch 舞台遮罩、SD 叠加）、开场→循环段、粒子（eyecatch 角色卡与泡泡、SD002/007/101/501）均与原版一致。
+      物理、时间轴混合：只在 E-mote 角色文件（`_storageType=="emote"`，带 metadata 的 PSB）分支调用，本作 43 个 `.mtn` 全部 `metadata=None`、没有角色 PSB，
+      原版运行时这些接口同样不会被调用；眨眼等在 `.mtn` 里是普通关键帧，已包含在对照中。
+
+验收：标题 9 种背景（`title_bg0..7`、`title_bg_trial`，需全通存档解锁）、两个 Logo、eyecatch、全部 SD 场景播放正确；E-mote 场景 60fps。
+
+### 批次 2 验收记录（2026-11-02）
+
+- 全覆盖场景：`tools/scenarios.py --only emote`（`artifacts/batch2-emote/`，GL 强制版 `artifacts/batch2-emote-gl/`）。
+  两个 Logo、全部 31 个 SD 文件、9 种标题背景、eyecatch 都在播放（截图有变化），43 个 `.mtn` 全部加载，日志无异常，无 `source unsupported`。
+- 完整 smoke：`artifacts/batch2-smoke/`，只剩批次 4 的 DSP 异常。
+- 与原版对照：`python3 -I tools/emote_compare.py artifacts/batch2-compare`（`report.json` 为逐对 RMSE，`sheets/` 左原版右移植）。
+  6 个 SD（含 4 个带粒子）、`title_bg0`、`title_bg_trial`、标题、eyecatch，共 43 对截图。SD 全部时间点、标题背景定格帧 RMSE ≤0.035（多数 ≤0.008）；
+  较高值只出现在开场/转场进行中的帧（原版在 Wine 中首次加载更慢，开场整体晚约 300–500ms）和 eyecatch 定格帧（角色卡是 `particleMotionList` 里随机选的 4 个变体之一，两边抽到的不同）。
+- 帧率：`tools/benchmark.py --emote [--desktop]`，1080p，dummy 音频，`artifacts/batch2-measure-{desktop,xvfb}/`。
+
+| 环境/后端 | 场景 | Swap/s | 最长间隔(ms) |
+|---|---|---:|---:|
+| 桌面 AMD 880M（120Hz）/ GL | SD105（最重） | 119.9 | 17.8 |
+| 桌面 / GL | SD001 | 119.9 | 16.0 |
+| 桌面 / GL | 标题开场 | 119.8 | 14.5 |
+| 桌面 / GL | eyecatch（叠在场景上） | 70.7 | 38.5 |
+| Xvfb llvmpipe / CPU | SD105 | 98.9 | 26.2 |
+| Xvfb llvmpipe / CPU | eyecatch | 20.2 | 109.9 |
+
+在目标硬件（有 GPU，引擎本身就要求 GLES 3.2）上 E-mote 场景平均都达到 60fps。Xvfb 行是 llvmpipe 软件 GL：那里整个引擎都在 CPU 上渲染，
+E-mote 自动改用 CPU 光栅化，不是 60Hz 的目标环境，只作回归用。批次 7 继续压帧时间：eyecatch 每帧读回 1080p 目标（约 5ms）再做 RGBA→BGRA，
+首次出现时上传贴图，最长间隔 38ms（>25ms 的批次 7 标准）。
+
+---
+
+## 批次 3：视频
+
+目标：OP（`op.mp4` / `op.wmv`）、7 个 ED（`ed1_ena … edg_gra.wmv`，均 1080p）、鉴赏「ムービー」、以及剧情里的图层视频（`gfx_movie.tjs`）全部正常。
+
+实际素材：`op.mp4` 为 H.264 + AAC 24fps，`op.wmv` 与 7 个 ED 为 **WMV3 + WMA Pro**（不是 wmav2）24/30fps，全部 1080p。
+资源里没有图层视频（无 webm/mpg/amv），所有视频都经 `[sysmovie]` / `[opmovie]`（`macro.ks`、`replay.ks`）走 overlay。
+
+- [x] **FFmpeg 后端** `plugins/lllj_compat/src/FFmpegMoviePlayer.cpp`：直接实现 `iTVPMoviePlayer`，结构照搬 krkrz 的 `Mpeg1MoviePlayer`
+      （自有解码线程、音频 sink 已播放采样数为主时钟、prepare 帧、seek/loop/pause），I420 走现有 GPU YUV 路径，layer 模式用 libyuv 转 BGRA。
+      引擎补丁只加 `TVPExternalMoviePlayerFactory` 钩子（`movie.cpp` 两个重载开头）。FFmpeg 不编译：`tools/fetch_ffmpeg.sh` 下载 BtbN 8.1 LGPL shared 预构建，
+      `$ORIGIN` RPATH（engine 已用 `--disable-new-dtags`，对 libavcodec 自己的 libswresample 也生效）+ `run.sh` 复制进 `game/`。
+      处理了两个素材特性：WMA Pro 在 seek 后输出无时间戳的帧（按上一帧结束 / 最近音频包时间推算）；WMV3 关键帧间隔 5 秒，
+      seek 后先压住音频直到首帧就绪，否则追帧期间音频先跑、视频丢帧。
+- [x] 模式：SDL 版 `vomMFEVR`→`vomOverlay`，mixer/overlay 同一 presenter。原版的 `SelectMovieFile` 只在 `checkWindowsVersion.canMFEVR`
+      且风格为 mfevr 时选 `.mp4`，Linux 上判定为非 Windows 而选了 wmv；prelude 让 `System.getOSVersion` 报 Windows 10（原版目标环境），
+      现在与 Windows 一致选 `op.mp4`。该分支的 `SetupFullHDMovie` 会 unlink 从未 link 的 `krmovie.dll`，prelude 的 unlink 对替身/静态插件改为 no-op。
+      `onStatusChanged` / 播放结束返回、`setPeriodEvent` / `setSegmentLoop`（引擎原为空函数，已在 `CheckUpdate` 按帧号实现）。
+- [x] 图层视频：`layerExBTOA`（`copyBottomBlueToTopAlpha` 等）早已静态链接并映射；素材中无图层视频，`--vomstyle layer` 强制 layer 模式播 OP 验证 ARGB 路径。
+      字幕 CSV / MovieSE 没有对应素材触发。
+- [x] 音画同步、跳过、seek、播完返回。左键跳过只在 `tflags.sysmovie_skip` 时生效（游戏脚本设计），右键/Esc 走 `rightClickHook` / `keyDownHook`。
+
+验收：8 个视频完整播放、音画同步、结束后正确返回；视频期间 60fps；剧情中的图层视频正常。
+
+### 批次 3 验收记录（2026-11-02）
+
+- 全覆盖：`python3 -I tools/scenarios.py artifacts/batch3-movie --only movie`。8 个视频都打开预期文件（OP 为 `op.mp4`），跳到 30 秒后画面变化、位置前进；
+  OP 与 5 个 ED 跳到结尾前 3 秒后自然播完返回鉴赏（2.4–4.4 秒），ED2 右键、ED3 Esc 跳过（0.6–0.7 秒）。视频最大落后音频时钟 ≤32ms，无音频欠载，
+  丢帧除 ED5 跳到结尾那段 27 帧外均为 0–1。
+- 强制模式：`--vomstyle layer` / `--vomstyle mixer`（`artifacts/batch3-movie-{layer,mixer}/`，此时原版逻辑选 `op.wmv`）通过；layer 截图颜色正确。
+- 回归：`artifacts/batch3-smoke/`（只剩批次 4 的 DSP 异常）、`artifacts/batch3-emote/` 通过。
+- 帧率：`tools/benchmark.py --movie [--desktop] --seconds 15`，1080p，dummy 音频，`artifacts/batch3-measure-{desktop,xvfb}/`。
+
+| 环境 | 视频 | Swap/s | 最长间隔(ms) | 出帧 | 丢帧 | 最大落后(ms) | 解码(ms/帧) |
+|---|---|---:|---:|---:|---:|---:|---:|
+| 桌面 AMD 880M（120Hz） | OP（H.264） | 119.9 | 26.5 | 419 | 0 | 21.3 | <1（帧线程，只计提交） |
+| 桌面 | ED1（WMV3） | 119.7 | 27.5 | 514 | 0 | 21.3 | 5.9 |
+| Xvfb llvmpipe | OP | 153.8 | 8.2 | 403 | 0 | 21.3 | — |
+| Xvfb llvmpipe | ED1 | 154.1 | 7.9 | 502 | 0 | 21.3 | 6.3 |
+
+桌面最长间隔 26–28ms 略超批次 7 的 25ms 标准，留给批次 7。音频实听（真实声卡下的口型/节拍同步）需在桌面 `./run.sh` 手动确认。
+字幕（批次 6）：overlay 模式下视频在最上层，字幕需烧进帧；播放器的 `Deliver` 是接 libass 的位置。
+
+---
+
+## 批次 4：音频与语音特效
+
+目标：`sysscn/voiceeffect.tjs`（剧本里调用约 1700 次：电话、对讲机、混响、回声…）和语音相关设置全部生效。
+
+实际用量：剧本引用 16 个 `voice/*.ini`（另有 `patch/dsp_テレビ.ini`、视频鉴赏用的 `wf_reverb`），只用到三种表达式：
+`BandPass_Butterworth(order,fc,bw)`、`Delay(ms,fb,mix,extend)`、`Verb(mix,room,damp,width,mode,extend)`。BGM 的 `track=` 依赖 14 个 `.mchx`。
+
+- [x] `wfBasicEffect` / `wfTypicalDSP`：`plugins/lllj_compat/src/wave_filters.cpp` 提供 `WaveSoundBuffer.WaveDSPFilter/DelayEffect/StkFreeVerb`，
+      与引擎 PhaseVocoder 相同地放进 `buf.filters`（链只在 `open()` 时按 `interface` 属性重建）。一个宿主类负责 float 转换、segment 透传和尾音，
+      `WaveDSPFilter` 用 vendor 的 DSPFilters（MIT，类型/族名与参数顺序与原插件一致，45 种组合全给），Verb 是按 STK FreeVerb 参数映射的 Freeverb。
+      EQ/Vocoder/RingModulation/Osc*/Math*/GainLimit 无引用，未实现。
+- [x] `wumultitrack`：`src/multitrack.cpp` 注册 `.mchx` 解码器（多声道 opus 按 `track` 声道对混成立体声，各轨增益可渐变），
+      实现 `multiTrackOpenCallbacks`、`setMultiTrackMask`；`setDelayMultiTrackMask` 未实现（脚本 typeof 检测后退化为立即切换）。
+      `wvdecoder`（`WaveSoundData`）只服务于无引用的 `OscLoop`，保持空壳。
+- [x] `getSample`（口型同步）：语音缓冲经 `语音|特效` 路径播放时 `sampleValue` 峰值 0.52（> `LIPLEVEL1` 0.01）；立绘嘴型画面未单独截图核对。
+- [ ] 音量/声道设置、角色单独音量、BGV、「お気に入りボイス」：均为引擎原生或纯脚本（`volume2`、`setGainQueryCallback`、`voicemode.tjs`），本批未专门验证。
+
+验收：抽查 10 处带特效的语音和 Wine 版对比听感一致；`DSP` 异常消失。
+
+### 批次 4 验收记录（2026-11-02）
+
+- 场景：`python3 -I tools/scenarios.py artifacts/batch4-audio --only audio`（连续两次通过，`artifacts/batch4-audio{,-2}/`）。
+  - 带通 `BandPass_Butterworth(2,1900,2900)` 经游戏的 `VoiceEffectFactory` 构造，`LLLJNative.waveFilterGain` 幅频响应 200Hz/1.9kHz/8kHz =
+    0.155/0.990/0.112，与 DSPFilters 设计值一致。
+  - 17 个特效经游戏的 `loadFilter` + `VoiceEffectFactory` 构造（剧本里的大写名能找到小写文件），全部有输出；1527ms 的语音在纯带通下约 2.1s
+    （含输出延迟）停止，带 Delay/Verb 的按 `extend` 延长到 2.2–3.2s。
+  - 语音缓冲 `kag.voices[0]._start("…|DSP_電話")` 插入 1 个滤镜并播放，口型电平见上。
+  - 14 个 `.mchx` 全部打开并经回调拿到 `mtrack_id` 和轨名；全部静音后电平为 0，恢复后有声。
+- 回归：`artifacts/batch4-smoke/`、`artifacts/batch4-emote/`、`artifacts/batch4-movie/` 通过，日志 0 个 `exception occured`；
+  `check_log` 已去掉 StkFreeVerb 例外，任何异常都算失败。
+- 未完成：与 Wine 原版的听感对比（Delay 的 dry/wet 按 STK 习惯交叉淡化、Verb 电平需据此校准）需在桌面 `./run.sh` 人工进行。
+  多轨按各轨直接相加，`rgb_live` / `rgb_guitarslap` 素材相加后峰值约 1.4（单轨已达 1.2），属素材特性。
+  鉴赏音乐页的频谱（`fftgraph.dll`）移到批次 5。
+
+---
+
+## 批次 5：其余插件和特效
+
+先按脚本实际调用和原版 `plugin/` 目录核对范围（`decomp/` 调用点 + 原 DLL 导出），只实现游戏真正走到的部分。
+
+- [x] **PackinOne 剩余部分**：`gaussianBlur/colorize/generateWhiteNoise`（layerExImage）、`copyRaster`（layerExRaster）、`Array.save2`（saveStruct）、
+      `Scripts.safeEvalStorage/getObjectContext/equalStruct`（scriptsEx）早已静态链接。真正缺的三个（脚本无保护调用）在 `src/layer_extras.cpp`：
+      `Storages.saveOctet`（お気に入りボイス、snapcapture、cgmode）、`Layer.fetchImageSize`（backlog 内嵌图、phonechat；经图像加载器解析名字）、
+      `System.getKnownFolderPath("Captures")`（XDG 图片目录）。`dirlistEx`、SliceLayer、`Array.toOctet` 无调用或有 typeof 保护，不做。
+- [x] **layerExDraw**：vendor krkr-ns 的 PlutoVG 版本（`plugins/lllj_compat/layerexdraw/`、`third_party/plutovg/`），静态插件 `lllj_layerexdraw`。
+      原来的空 shim 让游戏以为 GdiPlus 存在，反而跳过了自带回退。PathGradient 按 GDI+ 三角扇语义重写（krkr-ns 只取第一个外圈色，颜色轮盘成了纯色）。
+      ncbind 绑定头移到共用的 `shim/lllj_ncbind.h`，按 `TVP_PLUGIN_NAME` 给所有 ncbind 名字加前缀。exroll（片尾滚动）在 `custom.tjs` 里已注释掉，不需要文字绘制。
+- [x] **msdfrender**：`src/msdfrender.cpp` 按原 DLL 反汇编实现 `makeGlyphMSDF/SDF`（MSDF 取 RGB 中值、SDF 取 alpha，`cov = 128 + (sd-128)*param`）、
+      `operateGlyphToProvince`（饱和相加）、`makeBitmapFromProvince`、`getAscentHeight`，绘制用引擎的 `Layer.drawGlyph`。设置页滑块数值、流程图章节标题原来显示成「←」，现在正常。
+- [x] **extNagano / extrans**：138 个 `.scn` 只用 `crossfade/universal/mosaic`（93 个），另有 eyecatch 的 `turn`；extNagano 的转场剧本零引用（`extNaganoEnabled` 已注释）。
+      两者早已静态链接，`--only extras` 对 mosaic/turn 和 blurfade/flutter/multiripple/scanline/zoomfade/spin 各跑一次，均正常完成、无异常。
+- [x] **layerStwCopy**：`Layer.stitchWrappedCopy` 按原 DLL 反汇编实现（行循环 0x10002cb0、回绕行拷贝 0x10002c50）+ `run.sh` 占位文件，
+      游戏自己的 `SysTransitionEffect` 生效，删除了 prelude 里的替代转场。GlitchEffect 无任何调用、k2compat 原生部分均有 typeof 保护，不做。
+- [x] **fftgraph**：原版游戏目录里就没有 `fftgraph.dll`，原版同样提示「fftgraph.dllがありません」，保持一致，不做。
+- [x] **手柄**：不模拟 gamepad.dll。prelude 在没有显式 `-joypad` 时设 `-joypad=dinput`，游戏走原版自带的「引擎手柄」分支，
+      krkrz 的 SDL 手柄发 VK_PAD* 键，经 KAG `padKeyMap` 生效；再模拟 `GamepadPort` 会让同一按键触发两次。
+- [x] 流程图、backlog、设置各页、鉴赏入口由 smoke + `--only extras` 覆盖。流程图退出时原版脚本往无图像的 `kag.uibase` 上 `piledCopy`
+      （非 D3D 路径，Wine 下原版日志同样有这个被捕获的异常），prelude 给 `PlayBackViewUtil.pile` 加了判断。
+
+验收：自动化场景脚本覆盖的每个画面与 Wine 截图一致；日志无异常、无 `(lllj) stub:` 以外的警告（stub 也要逐个评估是否可接受）。
+
+### 批次 5 验收记录（2026-11-02）
+
+- 新场景：`python3 -I tools/scenarios.py artifacts/batch5-extras --only extras`（连续两次通过，`artifacts/batch5-extras{,-2}/`）。
+  `fetchImageSize('attention') == [1920,1080]`、`saveOctet` 往返一致、`getKnownFolderPath` 非空；流程图连线像素 `A8B9CA`（背景 `021340`）；
+  颜色轮盘四个色相点 `BAF385/F38585/83F3F3/BC8AEF`；手柄设置页；backlog 条纹转场 276ms；10 种转场均有中途画面变化、0 异常。
+- `check_log` 收紧：`(lllj) stub:` 只允许评估过的 Windows 专有 `System.setDpiAwareness/readRegValue/setIconicPreview`（`scenarios.py` 的 `WIN32_STUBS` 写明理由），
+  `msdfrender not linked` 也算失败。
+- 回归：`artifacts/batch5-smoke/`、`artifacts/batch5-emote/`、`artifacts/batch5-movie/`、`artifacts/batch5-audio/` 全部通过，日志 0 个 `exception occured`。
+- 与原版对照：`python3 -I tools/emote_compare.py artifacts/batch5-compare`（系统画面用 `kag.sysbase` 的 `piledCopy` 截取，与游戏截图功能相同；
+  `captureSnapshot` 只有场景层）。条纹转场 50/120/200ms 的条纹方向、宽度、相位一致；流程图（连线、小地图、图集字体标题）一致；
+  设置页滑块数值一致。流程图节点「プロローグ」后的缺字：原版画「□」，移植画「←」（两边都缺这个字形，只是占位符不同）。
+  原版在 Wine 下 `isD3D 0`、`uibase.hasImage 0`，与本移植同一路径。
+- 未完成：实体手柄需在桌面 `./run.sh` 人工确认。对照中发现正文排版与原版不同（原版两行之间多一行空行，点击等待图标位置不同），
+  与本批次无关（TextRender 未改动），记入批次 6 的文字细节。
+
+---
+
+## 批次 6：汉化（复刻 lllj_zh.exe / lllj_zh.dll）
+
+目标：中文正文、UI、标题动画、字幕；日/简/繁游戏内热切换；可读 Windows 汉化版存档。
+
+调研结论：日文原版本身就带柚子社的多语言框架（`CUSTOM_MULTILANG=0` 关闭）；汉化包换掉 16 个字节码脚本（`default.tjs` 打开开关）并提供三语 `.scn`、`*_cn` 界面、字体和字幕。
+`lllj_zh.dll` 是 Detours 注入 DLL，不是插件，行为全由内嵌 JSON（`.rsrc` RVA 0x29b0f0）决定：挂载 pck（打开文件时优先于 xp3）、`RedirectTable`、
+hook `TVPLoadPNG` 解 WebP、`-datapath` 改成 `savedata_zh`、视频字幕（libass）。其余（代码页 932、`TaskDialog`、窗口图标、软电池 DRM 检测）为 Windows 专有。
+
+- [x] **XPCK 格式与工具**：`XPCK` + 偏移 10 处 u32 索引位置；索引尾 `u8 方法 + u64 压缩/原始大小` + zstd；`File{info,segm}` 块，名字只有文件名，
+      文件按 2MiB 分段、每段一个 zstd 帧（段可共享）。508 个文件，147 个 `.png` 中 123 个是 WebP。`tools/xpck_unpack.py` 用于列表/解出/文本解码，运行时不解包。
+- [x] **挂载**（`src/xpck.cpp`）：原地读 `game/lllj_zh.pck`（`setup_game.sh`/`run.sh` 链接），注册 `xpck://`。引擎补丁在 `TVPGetPlacedPath` 开头处理无路径名
+      （先重定向，再查包，包优先于所有 autopath，与 DLL 一致），不存在的完整路径在退回 leaf 搜索时也先查包。`-lllj_zh=no` 为纯日文版，`-lllj_zh=<path>` 指定包。
+- [x] **语言重定向**：DLL 配置原样搬进 C++ 表：`title_bg*.mtn` 按 `SystemConfig.uiLanguageType`（`Eval:1`）、11 个 `.ass` 按 `kag.languageType`（`Eval:0`），
+      每次查找都在主线程求值（其他线程用最后的值），因此热切换后下一次打开即生效。
+- [x] **WebP**（`src/webp.cpp`）：PNG 加载器（含 header）先嗅探 `RIFF....WEBP`，libwebp 解码，与 DLL 的 `TVPLoadPNG` hook 等价。
+- [x] **视频字幕**（`src/movie_subtitles.cpp`）：视频名 → `.ass`（DLL 的 `Subtitles` 表）→ 重定向；字体为包里的 `MO UDShinGo SC Gb4 DB`、`等距更纱黑体 SC SemiBold`
+      （只注册给 libass，回退 fontconfig）。GPU YUV 路径混合进 I420 副本（BT.601，与 GL presenter/libyuv 一致），layer 模式混合进 BGRA。日文无字幕（`Map[0]=null`）。
+- [x] **语言切换入口**：标题右上「文/あ」是包自带的（jp↔cn，界面与正文一起）。Windows 菜单栏的「文本语言」在这里没有，改为 **Alt+L** 打开包里的
+      `LanguageSelectPanel`（原本只在标题内部可达）：游戏中只切正文语言（同菜单）；标题上同时经标题自己的 `changeLanguage` 切界面——繁体正文配简体界面，
+      因为包里只有 jp/cn 界面图（UI 语言设成 tw 会因 `title_tw.pbd` 不存在而报致命错误）。
+- [x] **存档**：汉化版存档目录 `limelight_lj/savedata_zh/`（`run.sh`，对应 DLL 的 SaveDataPath），`import_saves.py` 默认导入到此；存档 ID 就是游戏自己的汉化 ID。
+- [x] **其他**：更新检查（`yuzu_patchdetect.tjs`）经 `SystemConfig.noPatchDetect` 关闭；包的防倒卖提示照原样每次启动显示。
+      `kag.speechPlugin` 只有 Windows 朗读（SAPI）时才创建，包里的 `UpdateTextSpeechMenuCheck()` 无保护读取，prelude 给 `KAGWindow` 补了读作 void 的属性。
+- [x] **引擎修复**：`TVPPooledAllocator::allocate` 在持锁时触发内存压力回调，回调清存储缓存会再进 `free()` 自锁死；汉化包的大字体（约 200MB）进缓存时必现。改为释放锁后回调。
+- [x] 文字细节：批次 5 记下的行距/点击等待图标差异已不存在——`python3 -I tools/emote_compare.py artifacts/batch6-compare --port-arg=-lllj_zh=no`
+      的名字栏对照与 Wine 原版一致（两行间空行、图标位置）；汉化正文同样有段间空行。「。」单独折行（krkrsdl2 时期的记录）这次没有专门复现。
+      汉化版本身无法在 Wine 里对照：`lllj_zh.exe` 在 Xvfb 的 Wine 下因 `Direct3DCreate9() failed` 停在对话框（批次 8 在有 GPU 的 Wine 下补做）。
+
+验收：中文标题→新游戏→正文/选项/backlog 全中文；设置里切换日/简/繁即时生效；OP/ED 有对应语言字幕；汉化版存档可读。
+
+### 批次 6 验收记录（2026-11-03）
+
+- 新场景：`python3 -I tools/scenarios.py artifacts/batch6-zh --only zh`（多次连续通过，`artifacts/batch6-zh{,-2}/`）：包已挂载、启动即简体（`[1,1]`）、
+  标题为 `xpck://./title_bg_cn.mtn`；标题按钮切日文（`title_bg.mtn` 回到原文件、`op.ass` 无）再切回；Alt+L 面板选繁体（`[2,1]`，`op.ass` → `op_cht.ass`）；
+  WebP 背景尺寸 2120×1280、像素与 `dwebp` 一致；新游戏正文与 backlog 为繁体、游戏中切简体即时生效；OP 依次简/繁/日播放，字幕分别为 `op_chs`/`op_cht`/无
+  （首句时刻单帧 6 个图像，最长渲染约 4ms）；MV1（只在包里）字幕 `mv1_chs`。
+- Windows 汉化存档：`python3 -I tools/verify_windows_saves.py artifacts/batch6-winsave`，ID `{0F527B2E…}`，恢复到预期场景/位置并推进，正文为简体。
+- 回归（默认汉化版）：`artifacts/batch6-{smoke,emote,movie,audio,extras}/` 通过；纯日文版 `--engine-arg=-lllj_zh=no` 的 smoke（`artifacts/batch6-smoke-jp/`）通过。
+  `--only emote` 的已加载检查改为按 `requested→placed` 配对（标题背景经重定向加载 `_cn` 版本）。
+- 日志例外：`scenarios.py` 的 `KNOWN_CAUGHT` 只有汉化包脚本自己 try/catch 的两处——`snapcapture.tjs` 在 `world_object` 之前读水印代理
+  （`MakeImageDataProxy.get`）、构造 `kag` 期间读 `uiLanguageType` getter。krkrz 在抛出处记日志；Wine 下原版启动日志没有这两条，
+  推断原版引擎对同一函数内 try 捕获的异常不记日志（未直接证实）。`KNOWN_DIALOGS` 只允许包的防倒卖提示。
+
+## 许可
+
+krkr-ns 移植代码 MIT；krkrsdl3 派生代码（textrender）有“分发移植商业游戏须开源修改”条款；msg-tool/Kirakira 只作格式/行为参考。
+仅自用无问题，分发前需复核。

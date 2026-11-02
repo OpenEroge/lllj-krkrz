@@ -1,0 +1,6 @@
+// Voice effects and multi-track BGM: the classes scripts use are native static
+// members of WaveSoundBuffer installed at startup (src/wave_filters.cpp:
+// WaveDSPFilter, DelayEffect, StkFreeVerb; src/multitrack.cpp: .mchx,
+// setMultiTrackMask), so linking the DLLs only has to succeed. wvdecoder
+// (WaveSoundData) only backs the OscLoop effect, which is not implemented.
+compat_shim(["wfbasiceffect.dll", "wftypicaldsp.dll", "wumultitrack.dll", "wvdecoder.dll"], compat_nothing);

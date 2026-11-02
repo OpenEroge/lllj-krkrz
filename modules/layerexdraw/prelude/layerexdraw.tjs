@@ -1,0 +1,2 @@
+// layerExDraw.dll (GDI+ drawing on layers), the krkr-ns port in this module.
+compat_mapDll("layerexdraw.dll", "compat_layerexdraw");

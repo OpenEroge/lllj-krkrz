@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Download the prebuilt LGPL shared FFmpeg used by the movie backend
-# (plugins/lllj_compat/src/FFmpegMoviePlayer.cpp) into third_party/ffmpeg/.
+# (the FFmpeg VideoOverlay backend) into third_party/ffmpeg/.
 #
 # Source: https://github.com/BtbN/FFmpeg-Builds (LGPL build: native wmv3/vc1/
 # wmapro/h264/aac decoders, no GPL parts). BtbN prunes old autobuild releases,
@@ -8,8 +8,8 @@
 # pick a newer n8.1 lgpl-shared asset and update TAG/ASSET/SHA256 below
 # (soname major versions stay the same within 8.1).
 set -euo pipefail
-LLLJ="$(cd "$(dirname "$0")/.." && pwd)"
-DEST="$LLLJ/third_party/ffmpeg"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+DEST="$ROOT/third_party/ffmpeg"
 
 TAG="autobuild-2026-11-01-12-49"
 ASSET="ffmpeg-n8.1.3-29-gad3b795b72-linux64-lgpl-shared-8.1"

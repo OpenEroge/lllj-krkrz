@@ -1,63 +1,42 @@
 #!/bin/bash
-# Run Limelight Lemonade Jam on the krkrz_dev (SDL3) build.
-#   ./run.sh [extra krkrz options...]
+# Run a game on the engine built by ./build.sh.
+#   ./run.sh [engine options...]            GAME=<profile> selects games/<profile>/ (default lllj)
 # env: HEADLESS=1  -> private Xvfb display + dummy audio (for automated tests)
-#      REPLCH=dir  -> enable the REPL file channel in dir
+#      REPLCH=dir  -> enable the REPL file channel in dir (tools/dev/repl.sh)
 set -euo pipefail
-LLLJ="$(cd "$(dirname "$0")" && pwd)"
-BIN="$LLLJ/krkrz_dev/build/x64-linux/core/Release"
-GAME="$LLLJ/game"
-# exePath must be the game dir (arcPath -> patch.xp3, plugin/ placeholders)
-mkdir -p "$GAME"
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+GAME="${GAME:-lllj}"
+source "$ROOT/games/$GAME/game.conf"
+BIN="$ROOT/build/linux-x64/core/Release"
+RUN="$ROOT/$RUN_DIR"
+mkdir -p "$RUN"
 # Atomic replacement permits rebuilding while another isolated instance runs.
-EXE_TMP=$(mktemp "$GAME/.krkrz.XXXXXX")
+EXE_TMP=$(mktemp "$RUN/.krkrz.XXXXXX")
 cp "$BIN/krkrz" "$EXE_TMP"
 chmod 755 "$EXE_TMP"
-mv -f "$EXE_TMP" "$GAME/krkrz"
+mv -f "$EXE_TMP" "$RUN/krkrz"
 for so in "$BIN"/libSDL3.so.*.*; do
-	SO_TMP=$(mktemp "$GAME/.sdl3.XXXXXX")
+	SO_TMP=$(mktemp "$RUN/.sdl3.XXXXXX")
 	cp "$so" "$SO_TMP"
 	chmod 644 "$SO_TMP"
-	mv -f "$SO_TMP" "$GAME/$(basename "$so")"
-	ln -sf "$(basename "$so")" "$GAME/libSDL3.so.0"
+	mv -f "$SO_TMP" "$RUN/$(basename "$so")"
+	ln -sf "$(basename "$so")" "$RUN/libSDL3.so.0"
 done
 # prebuilt FFmpeg for the movie backend (tools/fetch_ffmpeg.sh); found via the
 # executable's $ORIGIN rpath so the system libraries with the same soname are not used
 for so in avformat.so.62 avcodec.so.62 avutil.so.60 swresample.so.6; do
-	SRC=$(readlink -f "$LLLJ/third_party/ffmpeg/lib/lib$so")
-	SO_TMP=$(mktemp "$GAME/.ffmpeg.XXXXXX")
+	SRC=$(readlink -f "$ROOT/third_party/ffmpeg/lib/lib$so")
+	SO_TMP=$(mktemp "$RUN/.ffmpeg.XXXXXX")
 	cp "$SRC" "$SO_TMP"
 	chmod 644 "$SO_TMP"
-	mv -f "$SO_TMP" "$GAME/lib$so"
+	mv -f "$SO_TMP" "$RUN/lib$so"
 done
-# placeholder files so the game's CanLoadPlugin() finds the DLLs we emulate
-for pd in plugin plugin64; do
-	mkdir -p "$GAME/$pd"
-	for d in PackinOne KAGParserEx wuvorbis wuopus win32dialog AlphaMovie fstat motionplayer_nod3d layerStwCopy; do
-		: > "$GAME/$pd/$d.dll"
-	done
+for pd in "${PLACEHOLDER_DIRS[@]}"; do
+	mkdir -p "$RUN/$pd"
+	for d in "${PLACEHOLDER_DLLS[@]}"; do : > "$RUN/$pd/$d.dll"; done
 done
-# Chinese patch (lllj_zh.pck, read by plugins/lllj_compat/src/xpck.cpp); -lllj_zh=no
-# runs the Japanese game. tools/setup_game.sh links it; this covers older game/ dirs.
-if [[ ! -e "$GAME/lllj_zh.pck" && -f "$LLLJ/../limelight/lllj_zh.pck" ]]; then
-	ln -s --relative "$LLLJ/../limelight/lllj_zh.pck" "$GAME/lllj_zh.pck"
-fi
-ARGS=("$GAME/" -loglevel=INFO -used2d=no -debugwin=no)
-HAS_DATAPATH=false
-ZH=false
-[[ -e "$GAME/lllj_zh.pck" ]] && ZH=true
-for ARG in "$@"; do
-	[[ "$ARG" == -datapath=* ]] && HAS_DATAPATH=true
-	[[ "$ARG" == -lllj_zh=no ]] && ZH=false
-done
-if ! "$HAS_DATAPATH"; then
-	# The Chinese build keeps its own saves (lllj_zh.dll's SaveDataPath, savedata_zh).
-	if "$ZH"; then
-		ARGS+=("-datapath=${XDG_DATA_HOME:-$HOME/.local/share}/limelight_lj/savedata_zh/")
-	else
-		ARGS+=("-datapath=${XDG_DATA_HOME:-$HOME/.local/share}/limelight_lj/")
-	fi
-fi
+game_prepare "$@"
+ARGS=("$RUN/" "${ENGINE_ARGS[@]}")
 if [ -n "${REPLCH:-}" ]; then
 	mkdir -p "$REPLCH"
 	rm -f "$REPLCH"/{cmd,cmd.tmp,resp,modal,modalresp}
@@ -100,7 +79,7 @@ if [ -n "${HEADLESS:-}" ]; then
 	fi
 	export DISPLAY=$DISP SDL_VIDEO_DRIVER=x11 SDL_AUDIO_DRIVER=dummy
 	unset WAYLAND_DISPLAY
-	cd "$GAME"
+	cd "$RUN"
 	./krkrz "${ARGS[@]}" "$@" &
 	GAME_PID=$!
 	if [[ -n "${REPLCH:-}" ]]; then
@@ -110,7 +89,7 @@ if [ -n "${HEADLESS:-}" ]; then
 	wait "$GAME_PID"
 	exit $?
 fi
-cd "$GAME"
+cd "$RUN"
 if [[ -n "${REPLCH:-}" ]]; then
 	printf '%s\n' "${DISPLAY:-}" > "$REPLCH/display"
 	printf '%s\n' "$$" > "$REPLCH/pid"

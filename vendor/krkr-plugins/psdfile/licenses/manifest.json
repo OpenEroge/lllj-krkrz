@@ -1,0 +1,5 @@
+{
+  "entries": [
+    { "name": "psdparse", "group": "plugin:psdfile", "license": "MIT","file": "../external/psdparse/LICENSE" }
+  ]
+}

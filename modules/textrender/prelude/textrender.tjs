@@ -1,0 +1,2 @@
+// textrender.dll (TextRenderBase), the krkrsdl3 port in this module.
+compat_mapDll("textrender.dll", "compat_textrender");

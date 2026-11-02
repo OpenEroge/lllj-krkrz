@@ -1,0 +1,92 @@
+// ライムライト・レモネードジャム: game-specific fixes on top of the generic
+// compatibility modules. Everything that knows this game's scripts, save IDs or
+// Chinese patch lives here (or in ../game.cpp), nothing in modules/ does.
+
+function lllj_log(m) { CompatNative.log("(lllj) " + m); }
+
+// The flowchart's mini player piles its last frame onto its parent before deletion. Off D3D
+// (this port's draw device) mainwindow.tjs makes that parent, kag.uibase, an imageless binder
+// layer, so the original script's piledCopy throws "Not drawable layer type" there.
+class LLLJPlayBackViewMembers {
+	function pile() {
+		if (smp && smp.parent.hasImage) smp.parent.piledCopy(smp.left, smp.top, smp, 0, 0, smp.width, smp.height);
+	}
+}
+class LLLJGameCompatMembers {
+	function loadOtherDataID(data) {
+		// The localization DLL uses its own save ID. Accept that one known ID
+		// for this game's Japanese ID, preserving rejection of unrelated saves.
+		// With the Chinese patch mounted the game's own ID is the localized one.
+		return this.saveDataID == "{3A6E75A7-2B41-4B20-A7A0-308A89C561B5}" &&
+			data.id == "{0F527B2E-D9B2-4C51-ADBA-06DD88B116CC}";
+	}
+	// speech.tjs creates kag.speechPlugin only with Windows text-to-speech (SAPI through
+	// win32ole, absent here). The Chinese patch's UpdateTextSpeechMenuCheck() reads it
+	// without a guard; every other reader tests typeof == "Object", which void fails.
+	property speechPlugin {
+		getter() { return typeof this.llljSpeechPlugin != "undefined" ? this.llljSpeechPlugin : void; }
+		setter(v) { this.llljSpeechPlugin = v; }
+	}
+	function onKeyDown(key, shift) {
+		// menu.dll is a data-only shim, so its native accelerator never fires.
+		if (key == VK_RETURN && (shift & ssAlt)) {
+			if (!(shift & ssRepeat)) this.fullScreen = !this.fullScreen;
+			return;
+		}
+		// Chinese patch: Alt+L replaces the Windows menu bar's text language menu.
+		if (key == VK_L && (shift & ssAlt)) {
+			if (!(shift & ssRepeat)) lllj_toggleLanguagePanel();
+			return;
+		}
+		return (global.lllj_originalKagKeyDown incontextof this)(key, shift);
+	}
+}
+// Chinese patch language switching. lllj_zh.exe switches the text language from the
+// window menu bar (文本语言), which this platform does not have; the title screen's own
+// button only toggles jp/cn. Alt+L opens the patch's language panel (uimain.tjs
+// LanguageSelectPanel, normally only reachable from the title). A choice sets the text
+// language like the menu did. On the title it also switches the UI through the title's
+// own changeLanguage: the patch ships jp and cn UI images only, so tw text uses cn UI
+// (a tw UI language would look for title_tw.pbd and fail).
+function lllj_setLanguage(idx) {
+	if (idx < 0 || idx >= LanguageTags.count) return;
+	var ui = idx == 0 ? 0 : 1;
+	if (SystemHook.currentState == "title" && SystemConfig.uiLanguageType != ui) Current.cmd("changeLanguage/" + ui);
+	if (kag.languageType != idx) SetLanguageType(idx);
+}
+function lllj_toggleLanguagePanel() {
+	if (!CompatNative.xpckEnabled() || typeof global.LanguageSelectPanel == "undefined") return;
+	if (typeof global.LLLJLanguageSelectPanel == "undefined") {
+		Scripts.eval("class LLLJLanguageSelectPanel extends LanguageSelectPanel {" +
+			"function LLLJLanguageSelectPanel(elm) { super.LanguageSelectPanel(elm); }" +
+			"function internalSetResult(tag, idx) { lllj_setLanguage(idx); } }");
+	}
+	var open = typeof LanguageSelectPanel.Instance != "undefined" ? LanguageSelectPanel.Instance : void;
+	if (open !== void && isvalid open) { open.close(); return; }
+	var panel = new LLLJLanguageSelectPanel(%[ storage: ["langselect_right", "langselect_auto.func"],
+		list: LanguageTags, selected: CurrentLanguageTag ]);
+	panel.open();
+}
+
+var lllj_originalExecStorage = Scripts.execStorage;
+function lllj_execStorage(storage, mode) {
+	var r = mode === void ? lllj_originalExecStorage(storage) : lllj_originalExecStorage(storage, mode);
+	if (Storages.extractStorageName(storage).toLowerCase() == "mainwindow.tjs") {
+		global.lllj_originalKagKeyDown = KAGWindow.onKeyDown;
+		CompatNative.attachMembers(LLLJGameCompatMembers, KAGWindow, true);
+	}
+	if (Storages.extractStorageName(storage).toLowerCase() == "scnchart_ui_smp.tjs")
+		CompatNative.attachMembers(LLLJPlayBackViewMembers, PlayBackViewUtil, true);
+	// Chinese patch: its online update check (yuzu_patchdetect.tjs) stays off, which also
+	// hides its menu item; custom.tjs reads the flag after yuzu_default.tjs.
+	if (Storages.extractStorageName(storage).toLowerCase() == "yuzu_default.tjs" && CompatNative.xpckEnabled())
+		SystemConfig.noPatchDetect = true;
+	return r;
+}
+Scripts.execStorage = lllj_execStorage;
+
+// gamepad.dll: the game's legacy XInput layer (exgamepad.tjs) is not emulated. With
+// "-joypad=dinput" the game skips gamepad.dll and uses the engine's own pad input, as the
+// original does on DirectInput: krkrz's SDL gamepad support sends VK_PAD* keys, which KAG
+// maps through padKeyMap (engine/doc/Gamepad.md). An explicit -joypad wins.
+if (System.getArgument("-joypad") === void) System.setArgument("-joypad", "dinput");

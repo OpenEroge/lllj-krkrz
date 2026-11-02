@@ -1,0 +1,6 @@
+{
+  "comment": "layerExImage が同梱する第三者コンポーネントのライセンス。更新したら core の licenses/gen_licenses_c.py --mode plugin で LicensesGen.cpp を再生成する。",
+  "entries": [
+    { "name": "CxImage", "group": "plugin:layerExImage", "license": "Zlib 系 (CxImage 独自条項)", "file": "../LICENSE.TXT", "note": "画像処理コードの一部を流用 (xImaDsp)" }
+  ]
+}

@@ -1,0 +1,70 @@
+E-mote runtime vendored from KRKR-ns (MIT; see UPSTREAM-LICENSE.txt, which
+also carries the krkrsdl3 terms the code derives from).
+
+  source:  https://github.com/DrFlyingPig/krkr-ns
+           krkrsdl2/src/plugins/emoteplayer/
+  commit:  949faf9a874f54b149a3fe5382cfccb38afb99bb (2026-10-16)
+  omitted: Platform.h (replaced)
+
+The particle emitter (no upstream equivalent) follows the behaviour of the
+reverse-engineered motionplayer in https://github.com/2468785842/krkr2
+(cpp/plugins/motionplayer/PlayerUpdateParticles.cpp, dca72645, 2026-06-11;
+Kirikiri license). Only the semantics were taken; the code is new.
+
+Build glue (no upstream equivalent)
+  emote_module.cpp   registers the static plugin "compat_emote"
+                          (prelude/emote.tjs maps motionplayer_nod3d.dll to it);
+                          CompatNative.emoteStats() reads the profiler hooks
+  Platform.h              TVPConsoleLog -> engine log (psb/Platform.h)
+  psb/                    PSBFile (krkr-ns PsbFilePlugin) and its helpers
+  shim/emote_prefix.h  force-included; stands in for krkr-ns' PCH
+  compat-core/include/compat/ncbind.h  krkrz_dev ncbind on engine-internal headers, private
+                          class names (shared with layerexdraw; the prefix
+                          comes from TVP_PLUGIN_NAME, default compat_emote)
+  shim/compat_stream.h      TVPReadI8LE (krkrz only has 16/32/64-bit readers)
+  shim/KrkrNSProf.h       profiler hooks -> CompatEmoteProf (emoteStats)
+  shim/SDL.h, SDL_opengles2.h, KrkrNSPaths.h, psbfile/PSBData.h   one-liners
+
+Backend selection (TVPCompositor.cpp)
+  The isolated-GL backend rasterizes meshes on the GPU in a private SDL GL
+  context and reads the result back for the Layer. It is used on hardware GL;
+  a software GL driver (llvmpipe/softpipe/swrast) or a failed self-test
+  selects the CPU rasterizer. -emote=cpu|gl forces either one.
+
+Local changes to upstream files (search for "PORT")
+  emoteplayer.cpp, emoteplayerclass.cpp
+      include "compat/ncbind.h" instead of "ncbind/ncbind.hpp"
+  emotefile.cpp
+      stream helper members (ReadBuffer/SetPosition/ReadI32LE/ReadI8LE) ->
+      krkrz free functions TJS::TVP*(stream, ...); mechanical rewrite
+      parse particle settings: frame content "prt", node "particle*"
+  EmoteSWRenderBackend.cpp
+      SDL2 renderer-assisted path compiled out unless COMPAT_EMOTE_SDL_RENDERER
+      (krkrz has no SDL_Renderer); every mesh takes the CPU rasterizer
+  EmoteGLRenderBackend.cpp
+      SDL3: the private context is built against the window current on the
+      main thread (no SDL_Renderer), keeps the engine's GLES attributes,
+      bool MakeCurrent/DestroyContext; restores the swap interval that
+      creating the context resets (it disabled the engine's vsync)
+  TVPCompositor.cpp
+      backend selection above
+  emoterunner.cpp  (behaviour fixes, verified against this title's assets)
+      - loopTime is the re-entry point after lastTime, not the loop length
+        (SD scenes: last=120/loop=60 play the intro once, then loop 60..120;
+        loop=last-1 holds the last frame). loopTime==0 behaves as before.
+      - an embedded motion under a parameterized node restarts from 0 when the
+        variable switches the node's content (eyecatch state 0 -> 1)
+      - particle emitters ("particle/point|ellipse|quad" sources): eyecatch
+        character card and bubbles, sweat/sparkle effects in SD002/007/101/501;
+        a clock that jumps is caught up one frame at a time (max 10 s)
+  emoteplayerclass.cpp
+      - a parameterized main motion's clock is not clamped at lastTime (its
+        frame comes from a variable; the clock drives embedded motions)
+      - dropped the "skipToSync TODO" / "stop TODO" log lines: both methods
+        are implemented, the messages were stale
+
+Known upstream gaps (still stubs). They only apply to E-mote character files
+(storage type "emote", PSB with metadata); this title ships none, so the
+scripts never reach them:
+  initPhysics, setTimelineBlendRatio, setColor, setOuterForce, start/stopWind,
+  skip, pass, assign, getVariableFrameList
