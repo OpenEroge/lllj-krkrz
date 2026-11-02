@@ -7,6 +7,8 @@
 #include "MsgIntf.h"
 #include "DebugIntf.h"
 #include "Extension.h"
+#include "SysInitIntf.h"
+#include "tjsDebug.h"
 #include "lllj_compat.h"
 
 #include "lllj_prelude.inc"
@@ -54,6 +56,17 @@ public:
 
 iTJSDispatch2 *CreateLLLJNative(iTJSDispatch2 *global)
 {
+	// Release builds do not create the optional TJS stack tracer. Enable it
+	// before entering any prelude script so trace push/pop stays balanced.
+	// This opt-in reference is independent of the VM's full debug mode.
+	tTJSVariant traceOption;
+	if (TVPGetCommandLine(TJS_W("-lllj_paths"), &traceOption) && ttstr(traceOption) == TJS_W("yes")) {
+		struct TraceLifetime {
+			TraceLifetime() { TJSAddRefStackTracer(); }
+			~TraceLifetime() { TJSReleaseStackTracer(); }
+		};
+		static TraceLifetime traceLifetime;
+	}
 	iTJSDispatch2 *obj = TJSCreateDictionaryObject();
 	for (auto &m : LLLJMethods()) {
 		iTJSDispatch2 *f = new tFuncObj(m.fn);

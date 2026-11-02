@@ -23,23 +23,58 @@
 
 目标：后面每一批都依赖的东西先补齐；把“看得见的小毛病”清掉。
 
-- [ ] **帧率测量**：加 `LLLJNative` 或启动参数（如 `-lllj_fps=yes`），每秒输出实际呈现帧数、最长帧耗时、Layer 合成/上传/等待各占多少。
+- [x] **帧率测量**：加 `LLLJNative` 或启动参数（如 `-lllj_fps=yes`），每秒输出实际呈现帧数、最长帧耗时、Layer 合成/上传/等待各占多少。
       先看 krkrz 自带的 `KRKRZ_DRAW_STATS` 和 `-drawthread`，能复用就复用。记录当前基线（标题、对话、转场三个场景）。
-- [ ] **自动化测试脚本**：把 `smoke.sh` 扩成场景脚本（TJS，经 REPL 或 `-replfile` 注入）：
+- [x] **自动化测试脚本**：把 `smoke.sh` 扩成场景脚本（TJS，经 REPL 或 `-replfile` 注入）：
       Logo → 标题 → 新游戏推进 N 句 → backlog → 存/读档 → 鉴赏（CG/SD/音乐/立绘）→ 设置页每一页 → 回标题。每步截图 + 帧率记录。
       用 `kag.process(storage, label)` 直接跳到指定场景，比点击稳定。
-- [ ] **`Rebuilding Auto Path Table` 反复触发**（每次约 0.3 秒）：查是谁在运行时调用 `Storages.addAutoPath/removeAutoPath`
+- [x] **`Rebuilding Auto Path Table` 反复触发**（每次约 0.3 秒）：查是谁在运行时调用 `Storages.addAutoPath/removeAutoPath`
       （在 prelude 里包一层打印调用栈 `Scripts.getTraceString()`），对症处理（缓存/改成只建一次/在引擎侧做增量重建）。
-- [ ] **被捕获异常**清零：`uisupport.tjs SetupFullHDMovie`、`mainwindow.tjs onResize`、标题的 `affinesourceimage loadImages`（后者属批次 2，先确认原因）。
-- [ ] **去码 CG**：`result/unencrypted/`（53 个 pimg）以最高优先级挂上。`initialize.tjs` 会依次挂 `patch2.xp3, patch3.xp3 …`（遇到第一个不存在的就停），
+- [x] **被捕获异常**清零：`uisupport.tjs SetupFullHDMovie`、`mainwindow.tjs onResize`、标题的 `affinesourceimage loadImages`（后者属批次 2，先确认原因）。
+- [x] **去码 CG**：`result/unencrypted/`（53 个 pimg）以最高优先级挂上。`initialize.tjs` 会依次挂 `patch2.xp3, patch3.xp3 …`（遇到第一个不存在的就停），
       所以用 `tools/xp3plain.py` 打成 `game/patch2.xp3` 最省事；先验证“后挂的优先”。
-- [ ] **16 个无名文件**：在存储查找失败时按 Hxv4 规则把文件名算成 64 位十六进制名再查（算法在 `<游戏目录>/xp3tool/` 的 Rust 代码里），
+- [x] **16 个无名文件**：在存储查找失败时按 Hxv4 规则把文件名算成 BLAKE2s-256 的 64 字符十六进制名再查（算法在 `<游戏目录>/xp3tool/` 的 Rust 代码里），
       或者干脆离线反查出名字后在 `game/` 里补 symlink。
-- [ ] **存档目录**改成 `~/.local/share/limelight_lj/`（看 krkrz 的 `-datapath` / appconfig 机制），首次启动可选导入 `<游戏目录>/savedata_zh/`。
+- [x] **存档目录**改成 `~/.local/share/limelight_lj/`（看 krkrz 的 `-datapath` / appconfig 机制），通过显式命令可选导入 `<游戏目录>/savedata_zh/`。
       Windows 存档是 TJS/4s0 加密（iv = `System.title`），`loadDataPack` 已能解，需实测读档。
-- [ ] 系统菜单/快捷键：全屏切换（Alt+Enter）、窗口缩放、右键菜单的替代品是否可用。
+- [x] 系统菜单/快捷键：全屏切换（Alt+Enter）、窗口缩放、右键菜单的替代品是否可用。
 
 验收：基线帧率数据写进本文件；smoke 日志里没有 `exception occured`（除批次 2/3/4 负责的）；去码 CG 在鉴赏模式可见。
+
+### 批次 1 验收记录（2026-11-02）
+
+- 完整回归：`artifacts/batch1-complete/report.json`（启动/Logo、推进 6 句、backlog、普通及快速存读档、鉴赏入口、10 个设置页、Alt+Enter、1280×720 缩放后真实点击、右键返回）。
+- Windows 存档：`artifacts/batch1-windows-complete/report.json`，按独立 Python 解码结果核对场景及 checkpoint 628，实际恢复 `savedata_zh/data_continue.jpg` 并推进，缩略图可读，来源 SHA-256 保持不变。
+- 资源：`artifacts/batch1-resources/report.json`，53 个 pimg 均解析到 `patch2.xp3` 且与来源 MD5 一致；16 个无名文件可读。真实原名未反查，运行时回退通过独立哈希向量和合成逻辑名测试。
+- 存储/容器/导入：`artifacts/batch1-storage-trace/report.json`，含 Release 调用栈、优先级、重复挂载、删除回退、负缓存、写入、compact、显式刷新、分段 JPEG 和截断拒绝。
+- 异常验收只接受已确认的 `.mtn` 加载与 `WaveSoundBuffer.StkFreeVerb` 调用点。`SetupFullHDMovie`、`onResize` 已消失。颜色轮盘和附加系统转场记录为批次 5 的 stub。
+- 存档格式补充：Windows JPEG 使用 APP11 分段（每段最多 16KiB 解码字节）及 `FF 00` 转义；直接从 `TJS/` 截到文件尾会误报 LZ4 损坏。已补容器解析和本作汉化存档 ID 兼容。
+
+### 1080p 基线
+
+同一 Release 构建，`KRKRZ_DRAW_STATS=ON`、drawthread=auto、dummy 音频；标题/对话各 30 秒，设置打开/返回共 10 轮。
+“旧索引”通过 `-lllj_index=no` 复现原有失效/全量重建行为，其余兼容修复相同；按顺序运行三组采样。
+Xvfb 为 llvmpipe（LLVM 23.1.3），真实桌面为 AMD Radeon 880M；两者均为 GLES 3.2 / Mesa 26.2.5。
+原始报告：`artifacts/batch1-measure-before/`、`artifacts/batch1-measure-after/`、`artifacts/batch1-measure-desktop/`。
+
+| 环境/索引 | 场景 | 采样(s) | Swap/s | 最长间隔(ms) | Layer(ms/s) | 上传(ms/s) | Swap耗时(ms/s) |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Xvfb/旧索引 | 标题（缺 E-mote） | 30.05 | 419.8 | 4.8 | 11.5 | 0.06 | 946.4 |
+| Xvfb/旧索引 | 对话 | 30.05 | 419.9 | 4.5 | 13.7 | 0.42 | 945.1 |
+| Xvfb/旧索引 | 10 轮转场 | 18.65 | 108.6 | 652.9 | 278.7 | 54.55 | 269.9 |
+| Xvfb/增量索引 | 标题（缺 E-mote） | 30.01 | 421.5 | 5.7 | 10.7 | 0.06 | 950.0 |
+| Xvfb/增量索引 | 对话 | 30.04 | 424.8 | 5.0 | 13.0 | 0.37 | 947.1 |
+| Xvfb/增量索引 | 10 轮转场 | 12.78 | 161.2 | 163.6 | 401.7 | 79.16 | 397.4 |
+| 桌面/增量索引 | 标题（缺 E-mote） | 30.01 | 119.9 | 16.8 | 2.5 | 0.01 | 995.1 |
+| 桌面/增量索引 | 对话 | 30.04 | 119.6 | 28.5 | 6.4 | 0.38 | 989.7 |
+| 桌面/增量索引 | 10 轮转场 | 13.34 | 97.1 | 216.4 | 404.2 | 57.32 | 384.0 |
+
+Layer 列是包含上传子项的完成阶段墙钟时间；Swap 耗时包含驱动等待/提交，各列不能相加当作独立 CPU 占比。
+计数代表完成的 Swap，不代表显示器 scanout 刷新率。标题/Logo/SD 的 E-mote 仍缺失，这些数值不构成全功能 60Hz 验收。
+
+10 轮转场中，目录扫描 **966 → 0**、索引重建 **21 → 0**；存档/设置写入仍是 20 次。
+Xvfb 总耗时 **18.65s → 12.78s**，最长呈现间隔 **652.9ms → 163.6ms**。
+真实桌面转场最长 **216.4ms**，仍需批次 7 处理布局、合成及资源加载卡顿。
 
 ---
 

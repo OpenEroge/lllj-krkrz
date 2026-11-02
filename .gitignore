@@ -10,3 +10,4 @@
 /.replch/
 *.log
 __pycache__/
+/artifacts/

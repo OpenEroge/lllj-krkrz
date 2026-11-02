@@ -14,6 +14,22 @@ if (typeof global.kirikiriz_generic != "undefined") {
 	try { global.kirikiriz_generic = 0; } catch (e) { LLLJNative.log("(lllj) cannot reset kirikiriz_generic: " + e.message); }
 }
 
+// Optional diagnostics retain the original calls and their search order.
+if (System.getArgument("-lllj_paths") == "yes") {
+	global.lllj_originalAddAutoPath = Storages.addAutoPath;
+	global.lllj_originalRemoveAutoPath = Storages.removeAutoPath;
+	function lllj_traceAddAutoPath(path) {
+		lllj_log("paths: add " + path + " " + Scripts.getTraceString());
+		return lllj_originalAddAutoPath(path);
+	}
+	function lllj_traceRemoveAutoPath(path) {
+		lllj_log("paths: remove " + path + " " + Scripts.getTraceString());
+		return lllj_originalRemoveAutoPath(path);
+	}
+	Storages.addAutoPath = lllj_traceAddAutoPath;
+	Storages.removeAutoPath = lllj_traceRemoveAutoPath;
+}
+
 global.LLLJ = %[
 	shims : %[],
 	loaded : %[],
@@ -135,9 +151,65 @@ function lllj_makeDataPackThumb(layer, ext, quality, component) {
 // Storages.fstat / dirlist / ... are built into krkrz
 lllj_shim("fstat.dll", lllj_nothing);
 function lllj_shim_proxyfs() {
-	if (typeof global.ProxyStorageMap == "undefined") global.ProxyStorageMap = %[];
+	// No proxy storage media is registered on Linux. Advertising the map makes
+	// SetupFullHDMovie mount proxy:// solely to redirect a Windows movie DLL.
 }
 lllj_shim("proxyfs.dll", lllj_shim_proxyfs);
+
+// uisystem defines these callbacks even when its optional layerStwCopy plugin
+// is absent. Keep the universal rule transition's progress unchanged then;
+// once batch 5 installs the effect object the original methods are used.
+function lllj_sysEffectOpen(t) {
+	if (typeof kag.sysTransitionEffect != "undefined") return kag.sysTransitionEffect.processOpen(t);
+	lllj_stubhit("SysTransitionEffect (layerStwCopy, batch 5)");
+	return t;
+}
+function lllj_sysEffectClose(t) {
+	if (typeof kag.sysTransitionEffect != "undefined") return kag.sysTransitionEffect.processClose(t);
+	return t;
+}
+function lllj_sysEffectStop() {
+	if (typeof kag.sysTransitionEffect != "undefined") return kag.sysTransitionEffect.processStop();
+}
+function lllj_colorPickerWithoutVector() {
+	// The game's fallback tries to load a nonexistent dummy_colorpicker image.
+	// Leave its predesigned color sample in place until layerExDraw is ported.
+	lllj_stubhit("HSVColorPicker (layerExDraw, batch 5)");
+	return null;
+}
+class LLLJGameCompatMembers {
+	function loadOtherDataID(data) {
+		// The localization DLL uses its own save ID. Accept that one known ID
+		// for this game's Japanese ID, preserving rejection of unrelated saves.
+		return this.saveDataID == "{3A6E75A7-2B41-4B20-A7A0-308A89C561B5}" &&
+			data.id == "{0F527B2E-D9B2-4C51-ADBA-06DD88B116CC}";
+	}
+	function onKeyDown(key, shift) {
+		// menu.dll is a data-only shim, so its native accelerator never fires.
+		if (key == VK_RETURN && (shift & ssAlt)) {
+			if (!(shift & ssRepeat)) this.fullScreen = !this.fullScreen;
+			return;
+		}
+		return (global.lllj_originalKagKeyDown incontextof this)(key, shift);
+	}
+}
+var lllj_originalExecStorage = Scripts.execStorage;
+function lllj_execStorage(storage, mode) {
+	var r = mode === void ? lllj_originalExecStorage(storage) : lllj_originalExecStorage(storage, mode);
+	if (Storages.extractStorageName(storage).toLowerCase() == "uisystem.tjs") {
+		global.SysTransEffectOpen = lllj_sysEffectOpen;
+		global.SysTransEffectClose = lllj_sysEffectClose;
+		global.SysTransEffectStop = lllj_sysEffectStop;
+	}
+	if (Storages.extractStorageName(storage).toLowerCase() == "hsvcpick.tjs" && typeof global.GdiPlus == "undefined")
+		OptionHSVPickerModule._createColorPickerOne = lllj_colorPickerWithoutVector;
+	if (Storages.extractStorageName(storage).toLowerCase() == "mainwindow.tjs") {
+		global.lllj_originalKagKeyDown = KAGWindow.onKeyDown;
+		LLLJNative.attachMembers(LLLJGameCompatMembers, KAGWindow, true);
+	}
+	return r;
+}
+Scripts.execStorage = lllj_execStorage;
 
 function lllj_shim_getlangname() {
 	lllj_stubs(System, "System", %[ getCurrentUILangName: "ja", getUserDefaultUILanguage: 0x411,

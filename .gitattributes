@@ -1,0 +1,3 @@
+# Patch context lines intentionally contain a leading space before tabs.
+# Check whitespace in the upstream source checkout before exporting instead.
+patches/*.patch -whitespace

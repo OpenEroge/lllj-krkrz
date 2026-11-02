@@ -1,0 +1,38 @@
+// Loaded only by the scenario runner; never changes normal game startup.
+function llljTestState() {
+	var s = %[ mode:SystemHook.currentState, storage:kag.conductor.curStorage,
+		line:kag.conductor.curLine, fullscreen:kag.fullScreen,
+		width:kag.innerWidth, height:kag.innerHeight,
+		page:Current.propget("page"), uistorage:Current.propget("storage"),
+		marker:f.llljSmokeMarker ];
+	if (typeof world_object.player == "Object") {
+		s.scene = world_object.player.curStorage;
+		s.label = world_object.player.curLabel;
+		s.point = world_object.player.curPoint;
+		s.sceneLine = world_object.player.curLine;
+		s.cursor = world_object.player.cur;
+	}
+	return s;
+}
+function llljTestKey(key, shift=0) {
+	kag.postInputEvent("onKeyDown", %[key:key, shift:shift]);
+	kag.postInputEvent("onKeyUp", %[key:key, shift:shift]);
+	return true;
+}
+function llljTestJump(storage, label) {
+	kag.process(storage, label);
+	return true;
+}
+function llljTestGalleryFind(prefix) {
+	var items = Current.propget("items");
+	if (!(items instanceof "Array")) return -2;
+	for (var i = 0; i < items.count; ++i) {
+		if (typeof items[i] != "Object") continue;
+		var list = items[i].list;
+		if (list instanceof "Array" && list.count > 0 && typeof list[0] == "Object") {
+			var file = list[0].file;
+			if (typeof file == "String" && file.indexOf(prefix) == 0) return i;
+		}
+	}
+	return -1;
+}

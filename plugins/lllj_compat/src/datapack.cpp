@@ -287,13 +287,44 @@ Bytes ReadStorage(const ttstr &name)
 
 tTJSVariant DecodeDataPack(const Bytes &all)
 {
-	// Save files are "<thumbnail jpg/png><data pack>": find the pack header.
-	size_t start = 0;
-	for (size_t i = 0; i + 8 <= all.size(); i++) {
-		if (all[i] == 'T' && memcmp(&all[i], "TJS/", 4) == 0 && (all[i + 4] == '4' || all[i + 4] == 'n') &&
-			all[i + 5] == 's' && all[i + 6] == '0' && all[i + 7] == 0) { start = i; break; }
+	// Windows saves embed the pack in consecutive JPEG APP11 segments. Each
+	// segment holds up to 16KiB of decoded bytes; FF is escaped as FF 00 even
+	// inside APP11. Plain ns0 saves from this port append after the thumbnail.
+	Bytes embedded;
+	if (all.size() >= 2 && all[0] == 0xff && all[1] == 0xd8) {
+		bool collecting = false;
+		for (size_t pos = 2; pos + 1 < all.size();) {
+			if (all[pos] != 0xff) { ++pos; continue; } // scan entropy bytes
+			const uint8_t marker = all[pos + 1];
+			if (marker == 0xff) { ++pos; continue; } // marker fill
+			if (marker == 0xd9) break;
+			if (marker == 0 || marker == 1 || (marker >= 0xd0 && marker <= 0xd8)) { pos += 2; continue; }
+			if (pos + 4 > all.size()) throw std::runtime_error("JPEG marker truncated");
+			const size_t length = (size_t(all[pos + 2]) << 8) | all[pos + 3];
+			if (length < 2 || length > all.size() - pos - 2)
+				throw std::runtime_error("JPEG segment truncated");
+			const size_t begin = pos + 4, end = pos + 2 + length;
+			if (marker == 0xeb) {
+				if (!collecting && end - begin >= 8 && !memcmp(all.data() + begin, "TJS/", 4))
+					collecting = true;
+				if (collecting) {
+					for (size_t i = begin; i < end; ++i) {
+						embedded.push_back(all[i]);
+						if (all[i] == 0xff && i + 1 < end && all[i + 1] == 0) ++i;
+					}
+				}
+			}
+			pos = end;
+		}
 	}
-	const Bytes buf(all.begin() + start, all.end());
+	const Bytes &container = embedded.empty() ? all : embedded;
+	// Otherwise find an unwrapped pack (including our appended JPEG/PNG form).
+	size_t start = 0;
+	for (size_t i = 0; i + 8 <= container.size(); i++) {
+		if (container[i] == 'T' && memcmp(&container[i], "TJS/", 4) == 0 && (container[i + 4] == '4' || container[i + 4] == 'n') &&
+			container[i + 5] == 's' && container[i + 6] == '0' && container[i + 7] == 0) { start = i; break; }
+	}
+	const Bytes buf(container.begin() + start, container.end());
 	if (buf.size() < 16 || memcmp(buf.data(), "TJS/", 4) != 0 || buf[5] != 's' || buf[6] != '0' || buf[7] != 0)
 		throw std::runtime_error("not a TJS data pack");
 	uint32_t seed = rd32(&buf[8]);
@@ -436,5 +467,29 @@ LLLJ_NATIVE(readOctet)
 	if (numparams < 1) return TJS_E_BADPARAMCOUNT;
 	Bytes b = ReadStorage(ttstr(*param[0]));
 	if (result) *result = tTJSVariant(b.data(), (tjs_uint)b.size());
+	return TJS_S_OK;
+}
+
+// Hxv4 hashes a leaf name, including extension, followed by its domain, in
+// UTF-16LE. The unpacker stores the 256-bit digest as 64 uppercase hex digits.
+ttstr LLLJHxFilename(const ttstr &leaf)
+{
+	ttstr input = leaf.AsLowerCase() + TJS_W("xp3hnp");
+	Bytes encoded;
+	for (const tjs_char *p = input.c_str(); *p; ++p) {
+		encoded.push_back(*p & 255); encoded.push_back((*p >> 8) & 255);
+	}
+	Blake2s hash(nullptr, 0);
+	hash.update(encoded.data(), encoded.size());
+	uint8_t digest[32]; hash.final(digest);
+	tjs_char text[65]; const tjs_char *hex = TJS_W("0123456789ABCDEF");
+	for (int i = 0; i < 32; ++i) { text[i*2] = hex[digest[i] >> 4]; text[i*2+1] = hex[digest[i] & 15]; }
+	text[64] = 0;
+	return ttstr(text);
+}
+LLLJ_NATIVE(hashFilename)
+{
+	if (!numparams) return TJS_E_BADPARAMCOUNT;
+	if (result) *result = LLLJHxFilename(ttstr(*param[0]));
 	return TJS_S_OK;
 }

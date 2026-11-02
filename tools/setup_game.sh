@@ -21,5 +21,11 @@ done
 for a in bgimage bgm evimage evimage2 fgimage image scn uipsd video voice voice2; do
 	ln -sfnT --relative "$R/$a" "$G/$a"
 done
-[ -f "$G/patch.xp3" ] || python3 -I "$LLLJ/tools/xp3plain.py" "$R/patch" "$G/patch.xp3"
+python3 -I "$LLLJ/tools/xp3plain.py" --if-stale "$R/patch" "$G/patch.xp3"
+if [[ -d "$R/unencrypted" ]]; then
+	python3 -I "$LLLJ/tools/xp3plain.py" --if-stale "$R/unencrypted" "$G/patch2.xp3"
+else
+	echo "Missing unencrypted/ (53 replacement CG files expected)" >&2
+	exit 1
+fi
 echo "game/ ready"

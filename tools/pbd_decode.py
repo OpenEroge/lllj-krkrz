@@ -170,7 +170,44 @@ def parse_value(b, p):
     raise ValueError('bad type %#x at %d' % (t, p - 2))
 
 
+def extract_pack(buf):
+    """Windows JPEG APP11 saves use byte-stuffed, 16KiB payload segments."""
+    parts = []
+    if buf.startswith(b'\xff\xd8'):
+        pos = 2
+        collecting = False
+        while pos + 1 < len(buf):
+            if buf[pos] != 255:
+                pos += 1
+                continue
+            marker = buf[pos + 1]
+            if marker == 255:
+                pos += 1
+                continue
+            if marker == 0xd9:
+                break
+            if marker in (0, 1) or 0xd0 <= marker <= 0xd8:
+                pos += 2
+                continue
+            if pos + 4 > len(buf):
+                raise ValueError('JPEG marker truncated')
+            length = int.from_bytes(buf[pos + 2:pos + 4], 'big')
+            if length < 2 or pos + 2 + length > len(buf):
+                raise ValueError('JPEG segment truncated')
+            payload = buf[pos + 4:pos + 2 + length]
+            if marker == 0xeb:
+                collecting = collecting or payload.startswith(b'TJS/')
+                if collecting:
+                    parts.append(payload.replace(b'\xff\x00', b'\xff'))
+            pos += 2 + length
+    if parts:
+        return b''.join(parts)
+    start = buf.find(b'TJS/')
+    return buf[start:] if start >= 0 else buf
+
+
 def decode(buf):
+    buf = extract_pack(buf)
     magic, check, seed, crypt, ivlen = struct.unpack_from('<4s4sIHH', buf, 0)
     assert magic == b'TJS/' and check[1:] == b's0\0', (magic, check)
     p = 16

@@ -10,5 +10,8 @@ Recreate:
   git -C krkrz_dev/src/core apply ../../../patches/krkrz-core.patch
 
 Re-export after changing the engine:
-  git -C krkrz_dev diff > patches/krkrz_dev-umbrella.patch
+  git -C krkrz_dev diff --ignore-submodules=all > patches/krkrz_dev-umbrella.patch
   git -C krkrz_dev/src/core diff > patches/krkrz-core.patch
+
+The umbrella patch excludes the separately exported core submodule's dirty
+gitlink. Check both patches against the pinned upstream files after exporting.

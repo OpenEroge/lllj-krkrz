@@ -5,9 +5,9 @@
 
 ## 1. 一句话现状
 
-原型已跑通：启动 → ATTENTION → 标题菜单 → はじめから → 序章正文。背景、事件 CG（pimg 差分）、立绘、头像窗、对话框文字、
-名字栏、rule 转场、BGM（opus）、语音（ogg）、快存/快读（含缩略图）都已在无头环境截图确认。
-**缺**：E-mote（标题背景/Logo/SD 动画全黑）、视频、语音特效、若干插件、汉化、帧率未测。
+批次 1 已实现：去码包、增量资源索引、Hxv4 回退、隔离场景回归、实际 Swap 计时、游戏专用存档目录及 Windows 读档兼容。
+完整 smoke 和 Windows 继续存档恢复/推进均有截图和断言。基线、验收命令与证据入口见 `PLAN.md` 批次 1。
+**后续**：E-mote、视频、DSP、其余插件、汉化和完整 60Hz 优化仍按各自批次处理。
 
 ## 2. 关键路径
 
@@ -17,30 +17,31 @@
 | 游戏原始目录 | 项目同级的 `../limelight/` |
 | 解包数据（只读，别改） | `<游戏目录>/result/`；`game/` 里全是指向它的 symlink |
 | 引擎 | `krkrz_dev/`（master + 递归子模块），构建产物 `krkrz_dev/build/x64-linux/core/Release/krkrz` |
-| 我们的代码 | `plugins/lllj_compat/`（全部改动集中在这里 + 两个小 patch） |
-| 本地改动 | `patches/krkrz_dev-umbrella.patch`（`KRKRZ_LLLJ` 选项）、`patches/krkrz-core.patch`（大小写不敏感文件查找） |
+| 我们的代码 | `plugins/lllj_compat/`、`tools/` 和两份引擎补丁 |
+| 本地改动 | `patches/krkrz_dev-umbrella.patch`（`KRKRZ_LLLJ` 选项/宏）、`patches/krkrz-core.patch`（文件查找、索引、SDLOGL 计时/重绘） |
 | 脚本查阅 | `decomp/data|patch/**/*.dis`（字节码反汇编）、`decomp/text/`（解密后的 .ks/.tjs/.toml 文本） |
 | 参考实现 | `ref/krkr-ns`（MIT，最重要：emoteplayer/视频/layerexdraw 都在 `krkrsdl2/src/plugins` 和 `core/visual/sdl2`）、`ref/msgtool_tjs_ns0.rs`（GPL，只当格式说明） |
 | 上次 krkrsdl2 尝试的计划 | `~/.claude/plans/https-github-com-krkrsdl2-krkrsdl2-linu-functional-flamingo.md`（插件矩阵、汉化包分析，可参考） |
-| 存档 | `~/.local/share/wamsoft/krkrz/`（里面全是测试数据，可删） |
+| 存档 | `${XDG_DATA_HOME:-$HOME/.local/share}/limelight_lj/`；测试各自用输出目录内的 `saves/` |
+| 验收产物 | `artifacts/`（不进 git）；每个运行目录有 `report.json`、`game.log`、截图和私有 REPL |
 
 ## 3. 日常工作流
 
 ```bash
-cd /path/to/lllj-krkrz && source env.sh
+cd /path/to/lllj-krkrz
+tools/build.sh                     # 搬迁后也用此入口，默认开启 DRAW_STATS
 tools/iterate.sh 30                 # 增量编译 + 无头跑 30 秒 + 打印报错（日志在 last.log）
-tools/smoke.sh  /tmp/x 6            # 启动→ATTENTION→标题→はじめから→推进6句，截图 01..04
-tools/savetest.sh /tmp/y            # 在 smoke 基础上测快存/快读
+SKIP_BUILD=1 tools/smoke.sh artifacts/run-01 6  # 新输出目录，完整场景回归
+python3 -I tools/verify_windows_saves.py artifacts/win-01
 ./run.sh                            # 在真桌面跑（有声音）
 ```
 
-- 无头环境：私有 Xvfb `:91`（2560x1600），`SDL_AUDIO_DRIVER=dummy`。窗口默认 1440x810，`tools/click.sh` 会先把窗口挪到 (0,0)。
-- 游戏内坐标（1440x810 窗口）：ATTENTION 任意处点击；标题「はじめから」(212,771)；系统栏 Q.SAVE (626,790)、Q.LOAD (698,790)；
-  确认框「はい」(590,473)。
+- 无头环境自动分配 Xvfb display（2560x1600），使用 dummy 音频。指定 `HEADLESS_DISPLAY` 时连接调用方已有的 display。
+- `REPLCH/display` 和 `REPLCH/pid` 标识输入目标；`REPLCH=... tools/click.sh X Y` 使用该窗口的客户区坐标。
 - REPL：`tools/repl.sh .replch 'kag.conductor.curStorage'`。多语句用 `(function(){ ...; return x; })()`。
   截图：`tools/cap.sh /abs/path.png`（`System.captureScreen`；`Agent.*` 不可用，因为关了 Elements）。
 - 只想测原生 API、不想走游戏启动：`./run.sh -nostartup` + REPL（例如 `Storages.addAutoPath(System.exePath+'evimage/')` 后测 `PSBFile`）。
-- **杀进程只用 `pkill -x krkrz`**。`pkill -f` 会把自己的 shell 命令行也匹配上杀掉。
+- 回归工具管理自身进程、存档、TMPDIR 和实例锁；手工调试也按自己的 PID 结束进程，保留其他会话。
 - 改 `prelude.tjs` 后必须重新编译（它在 configure 时被嵌进 `lllj_prelude.inc`；cmake 已设 CONFIGURE_DEPENDS，`cmake --build` 会自动重新 configure）。
   新增 `.cpp` 放进 `plugins/lllj_compat/src/` 即可（GLOB + CONFIGURE_DEPENDS）。
 
@@ -71,10 +72,18 @@ tools/savetest.sh /tmp/y            # 在 smoke 基础上测快存/快读
 5. **TextRender 字宽**：游戏的字体名是预渲染字体（`スキップ` 等，.tft），引擎光栅化器量不出来。原版做法是回调脚本的
    `onFontChange(%[face,bold,italic])` / `onGetTextWidth(ch, size)`，已照做。
 6. **大小写**：脚本请求 `system/Initialize.tjs`，盘上是 `initialize.tjs`（文件名来自哈希表，全小写）。`patches/krkrz-core.patch` 在 SDL3 文件层加了按分量的大小写回退。
-7. **存档格式**：`<缩略图 jpg/png 字节><TJS/ns0 数据包>`。读的时候要在文件里搜数据包头，不能假定从 0 开始。缩略图由 `lllj_makeDataPackThumb` 用 `saveLayerImage` 生成。
-8. **插件目录**：64 位引擎下游戏用 `plugin64/`，不是 `plugin/`。
+7. **存档格式**：本移植写 `<缩略图><TJS/ns0>`；Windows 的 JPEG 把 TJS/4s0 分散在 APP11 段内，每段最多 16KiB 解码数据，`FF 00` 要还原为 `FF`。
+   先用 `tools/pbd_decode.py SAVE.jpg` 独立解码，再排查密钥。系统 `datasc/datasu` 也可能是 FEFE 压缩文本。
+   汉化版与日文版存档 ID 不同，prelude 仅接受本作已确认的汉化 ID；保存里的 `option_cn__bg0.tlg` 缺失时回退到中性背景。
+8. **插件目录**：游戏的 CanLoadPlugin 按位数检查 `plugin64/`，SDL 引擎实际搜索 `plugin/`，启动脚本两处都放占位文件。
 9. 启动参数 `-used2d=no -debugwin=no` 是必须的（否则会去链接 D2D、并模拟 krkr2 调试控制台 → 一堆 Win32 对话框）。
 10. 原始 `Debug.message` 被游戏在发行模式下置空，调试输出用 `LLLJNative.log()`（prelude 里 `lllj_log()`）。
+11. **启动自动化**：先走完 caution/Logo，再用 `kag.process` 跳场景。提前跳出 caution 会留下透明 `SysCoverLayer`，标题看得见却点不到。
+    游戏中的 backlog/设置/存档页使用 `SystemAction` 打开，保留 extra conductor；Windows 读档用完整 `loadFunction` 流程恢复 UI 状态。
+12. **资源索引**：重复 add/remove 不再失效；新路径增量加入；compact 和资源外存档写入保留索引。外部增删资源后用 `Storages.clearStorageCaches()` 显式刷新。
+    `-lllj_paths=yes` 在 Release 中独立启用 TJS 栈追踪，查询调用栈和扫描事件，`-lllj_index=no` 是性能对照开关。原始资源保持只读。
+13. **测量**：`-lllj_fps=yes` 计默认 SDLOGL 完成的 Swap；采样命令和各字段口径见 README。切换绘制设备前先确认其呈现钩子已覆盖。
+    本次基线的 Xvfb 用 llvmpipe，真实桌面用 AMD Radeon 880M；两种数据分开记录，原始报告保留渲染器和采样时长。
 
 ## 6. 当前已知问题（详见 PLAN.md 对应批次）
 
@@ -83,12 +92,13 @@ tools/savetest.sh /tmp/y            # 在 smoke 基础上测快存/快读
 | 标题背景黑、`title_bg.mtn` 加载异常（被捕获）；Logo/SD/eyecatch 缺 | 批次 2（E-mote） |
 | 视频不能播（movie-player 只支持 WebM + MPEG-1） | 批次 3 |
 | `voiceeffect.tjs DSP` 异常（电话/对讲机音效缺） | 批次 4 |
-| 运行中反复 `Rebuilding Auto Path Table`（约 0.3 秒/次，造成卡顿） | 批次 1 |
-| 被捕获的异常：`uisupport.tjs SetupFullHDMovie`、`mainwindow.tjs onResize` | 批次 1 |
-| 16 个无名文件（voice 8、voice2 4、uipsd 4）读不到 | 批次 1 |
-| 去码 CG（`result/unencrypted`）未挂载 | 批次 1 |
-| 存档目录名是 `wamsoft/krkrz` | 批次 1 |
-| 帧率从没测过 | 批次 1 测量，批次 7 优化 |
+| 颜色选择器依赖 layerExDraw；当前显示色样，禁用缺失的轮盘实现 | 批次 5 |
+| layerStwCopy 附加系统转场未实现；当前使用原有规则转场 | 批次 5 |
+| 汉化 UI、字幕及语言切换尚未挂载；读汉化存档不等于完成汉化 | 批次 6 |
+| 转场仍有布局/软件合成耗时；完整 60Hz 需后续场景实测 | 批次 7 |
+
+批次 1 的 `SetupFullHDMovie`、`onResize` 已清除；前者因空 ProxyStorageMap 宣称了未实现的 `proxy://`，后者因 SDL 设备缺少 `recreate()`。
+53 个去码文件的挂载来源与 MD5 均已核验。16 个无名文件保留哈希名：文件字节可读，回退算法通过独立向量及合成逻辑名请求验证；真实原名仍未反查。
 
 ## 7. 交接给新会话时可以直接贴的开场白
 

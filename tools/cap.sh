@@ -1,7 +1,5 @@
-#!/bin/bash
-# Screenshot the running game via the REPL channel. tools/cap.sh OUT.png
+#!/usr/bin/env bash
+# Capture only the game identified by the REPL channel.
+set -euo pipefail
 LLLJ="$(cd "$(dirname "$0")/.." && pwd)"
-rm -f "$1"
-"$LLLJ/tools/repl.sh" "${REPLCH:-$LLLJ/.replch}" "System.captureScreen('$1')" 10 >/dev/null
-for i in $(seq 50); do [ -s "$1" ] && break; sleep 0.1; done
-ls -la "$1"
+exec python3 -I "$LLLJ/tools/capture.py" "${REPLCH:-$LLLJ/.replch}" "$1"

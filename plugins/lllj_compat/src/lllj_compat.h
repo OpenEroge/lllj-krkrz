@@ -17,6 +17,15 @@ struct LLLJRegisterMethod {
 	LLLJRegisterMethod(const tjs_char *name, LLLJNativeFunc fn);
 };
 
+// Main-thread hooks from the SDL presentation and dispatch paths.
+bool LLLJFpsEnabled();
+void LLLJPresented(tjs_uint64 wait_ns, tjs_uint64 show_ns);
+void LLLJPollFrameStats();
+ttstr LLLJHxFilename(const ttstr &leaf);
+void LLLJStorageEvent(const char *kind, const ttstr &path);
+bool LLLJIncrementalPaths();
+ttstr LLLJSaveAssetFallback(const ttstr &leaf);
+
 #define LLLJ_NATIVE(name) \
 	static tjs_error lllj_native_##name(tTJSVariant *result, tjs_int numparams, \
 		tTJSVariant **param, iTJSDispatch2 *objthis); \

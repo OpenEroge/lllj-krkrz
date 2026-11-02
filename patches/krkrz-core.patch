@@ -1,3 +1,280 @@
+diff --git a/common/base/StorageIntf.cpp b/common/base/StorageIntf.cpp
+index c100157..658cd02 100644
+--- a/common/base/StorageIntf.cpp
++++ b/common/base/StorageIntf.cpp
+@@ -36,6 +36,9 @@
+ #include <filesystem>
+ #include "md5.h"                 // Storages.getMD5HashString
+ #include "ScriptMgnIntf.h"       // TVPGetScriptDispatch (Storages.fstat の Date)
++#ifdef KRKRZ_LLLJ
++#include "lllj_compat.h"
++#endif
+ 
+ #define TVP_DEFAULT_ARCHIVE_CACHE_NUM 64
+ #define TVP_DEFAULT_AUTOPATH_CACHE_NUM 256
+@@ -1518,6 +1521,49 @@ tTJSHashCache<ttstr, ttstr> TVPAutoPathCache(TVP_DEFAULT_AUTOPATH_CACHE_NUM);
+ tTJSHashTable<ttstr, tTVPFileInfo, tTJSHashFunc<ttstr>, TVP_AUTO_PATH_HASH_SIZE>
+ 	TVPAutoPathTable;
+ bool AutoPathTableInit = false;
++#ifdef KRKRZ_LLLJ
++namespace {
++struct LLLJListing {
++	std::filesystem::file_time_type modified;
++	std::vector<ttstr> names;
++};
++std::map<tjs_string, LLLJListing> LLLJListings;
++size_t LLLJIndexedPathCount = 0;
++// Called with TVPCreateStreamCS held. Directory mtime follows symlinks and
++// changes for creates/deletes/renames; only enumeration is cached, never data.
++void LLLJGetListAt(const ttstr &path, iTVPStorageLister *dest)
++{
++	if (!LLLJIncrementalPaths()) {
++		TVPStorageMediaManager.GetListAt(path, dest);
++		LLLJStorageEvent("scan", path);
++		return;
++	}
++	std::error_code error;
++	std::filesystem::file_time_type modified{};
++	bool cacheable = path.StartsWith(TJS_W("file://"));
++	if (cacheable) {
++		ttstr local = TVPGetLocallyAccessibleName(path);
++		modified = std::filesystem::last_write_time(std::filesystem::path(local.AsStdString()), error);
++		cacheable = !error;
++	}
++	const auto key = path.AsStdString();
++	auto found = LLLJListings.find(key);
++	if (cacheable && found != LLLJListings.end() && found->second.modified == modified) {
++		for (const auto &name : found->second.names) dest->Add(name);
++		LLLJStorageEvent("listing_hit", path);
++		return;
++	}
++	struct Collector : iTVPStorageLister {
++		std::vector<ttstr> names;
++		void TJS_INTF_METHOD Add(const ttstr &name) override { names.emplace_back(name.c_str(), name.GetLen()); }
++	} collected;
++	TVPStorageMediaManager.GetListAt(path, &collected);
++	LLLJStorageEvent("scan", path);
++	for (const auto &name : collected.names) dest->Add(name);
++	if (cacheable) LLLJListings[key] = {modified, std::move(collected.names)};
++}
++}
++#endif
+ //---------------------------------------------------------------------------
+ 
+ void TVPAddAutoPathTable(const ttstr & name, const tTVPFileInfo &info)
+@@ -1571,6 +1617,9 @@ void TVPAddAutoPathCacheFile(const ttstr & name)
+ //---------------------------------------------------------------------------
+ static void TVPClearAutoPathCache()
+ {
++#ifdef KRKRZ_LLLJ
++	LLLJIndexedPathCount = 0;
++#endif
+ 	TVPAutoPathCache.Clear();
+ 	TVPAutoPathTable.Clear();
+ 	AutoPathTableInit = false;
+@@ -1584,7 +1633,14 @@ struct tTVPClearAutoPathCacheCallback : public tTVPCompactEventCallbackIntf
+ 		{
+ 			// clear the auto search path cache on application deactivate
+ 			tTJSCriticalSectionHolder cs_holder(TVPCreateStreamCS);
++#ifdef KRKRZ_LLLJ
++			// Compaction evicts data, not the immutable resource directory index.
++			// Scripted writes/path changes and explicit clearCache still refresh it.
++			if (LLLJIncrementalPaths()) TVPAutoPathCache.Clear();
++			else TVPClearAutoPathCache();
++#else
+ 			TVPClearAutoPathCache();
++#endif
+ 		}
+ 	}
+ } static TVPClearAutoPathCacheCallback;
+@@ -1603,8 +1659,16 @@ void TVPAddAutoPath(const ttstr & name)
+ 		std::find(TVPAutoPathList.begin(), TVPAutoPathList.end(), normalized);
+ 	if(i == TVPAutoPathList.end())
+ 		TVPAutoPathList.push_back(normalized);
+-
++#ifdef KRKRZ_LLLJ
++	else if (LLLJIncrementalPaths()) return; // Idempotent registration does not change precedence.
++	if (!LLLJIncrementalPaths()) { TVPClearAutoPathCache(); return; }
++	// Existing entries remain valid: the new, highest-priority path is indexed
++	// lazily and overwrites matching names in the usual registration order.
++	TVPAutoPathCache.Clear();
++	AutoPathTableInit = false;
++#else
+ 	TVPClearAutoPathCache();
++#endif
+ }
+ //---------------------------------------------------------------------------
+ void TVPRemoveAutoPath(const ttstr &name)
+@@ -1621,6 +1685,9 @@ void TVPRemoveAutoPath(const ttstr &name)
+ 		std::find(TVPAutoPathList.begin(), TVPAutoPathList.end(), normalized);
+ 	if(i != TVPAutoPathList.end())
+ 		TVPAutoPathList.erase(i);
++#ifdef KRKRZ_LLLJ
++	else if (LLLJIncrementalPaths()) return;
++#endif
+ 
+ 	TVPClearAutoPathCache();
+ }
+@@ -1632,8 +1699,15 @@ static tjs_uint TVPRebuildAutoPathTable()
+ 
+ 	tTJSCriticalSectionHolder cs_holder(TVPCreateStreamCS);
+ 	if(AutoPathTableInit) return 0;
++#ifdef KRKRZ_LLLJ
++	LLLJStorageEvent("rebuild", ttstr());
++#endif
+ 
++#ifdef KRKRZ_LLLJ
++	if (LLLJIndexedPathCount == 0) TVPAutoPathTable.Clear();
++#else
+ 	TVPAutoPathTable.Clear();
++#endif
+ 
+ 	tjs_uint64 tick = TVPGetTickCount();
+  	TVPAddLog( (const tjs_char*)TVPInfoRebuildingAutoPath );
+@@ -1641,7 +1715,11 @@ static tjs_uint TVPRebuildAutoPathTable()
+ 	tjs_uint totalcount = 0;
+ 
+ 	std::vector<ttstr>::iterator it;
++#ifdef KRKRZ_LLLJ
++	for(it = TVPAutoPathList.begin() + LLLJIndexedPathCount; it != TVPAutoPathList.end(); it++)
++#else
+ 	for(it = TVPAutoPathList.begin(); it != TVPAutoPathList.end(); it++)
++#endif
+ 	{
+ 		const ttstr & path = *it;
+ 		tjs_uint count = 0;
+@@ -1718,7 +1796,11 @@ static tjs_uint TVPRebuildAutoPathTable()
+ 					list.insert( file );
+ 				}
+ 			} lister;
++#ifdef KRKRZ_LLLJ
++			LLLJGetListAt(path, &lister);
++#else
+ 			TVPStorageMediaManager.GetListAt(path, &lister);
++#endif
+ 
+ 			if( !TVPIgnoreFileProperty )
+ 			{
+@@ -1758,6 +1840,9 @@ static tjs_uint TVPRebuildAutoPathTable()
+ 			TJS_W(" (") + ttstr((tjs_int)(endtick - tick)) + TJS_W("ms)"));
+ 
+ 	AutoPathTableInit = true;
++#ifdef KRKRZ_LLLJ
++	LLLJIndexedPathCount = TVPAutoPathList.size();
++#endif
+ 
+ 	return totalcount;
+ }
+@@ -1823,6 +1908,29 @@ ttstr TVPGetPlacedPath(const ttstr & name)
+ 			return TVPMakeIndependentString(result->FilePath);
+ 		}
+ 
++		// Normal names across all active paths take priority over hash fallback.
++#ifdef KRKRZ_LLLJ
++		const ttstr saveAlias = LLLJSaveAssetFallback(storagename);
++		if (!saveAlias.IsEmpty()) {
++			auto *alias = TVPFindAutoPathTable(saveAlias);
++			if (alias && !(alias->Flag & tTVPFileInfo::EMPTY_FILE)) {
++				TVPAutoPathCache.Add(TVPMakeIndependentString(name), TVPMakeIndependentString(alias->FilePath));
++				return TVPMakeIndependentString(alias->FilePath);
++			}
++		}
++		const ttstr hash = LLLJHxFilename(storagename);
++		const ttstr hashedPath = TVPExtractStoragePath(normalized) + hash;
++		ttstr resolved;
++		if (TVPIsExistentStorageNoSearchNoNormalize(hashedPath)) resolved = hashedPath;
++		else {
++			auto *hashed = TVPFindAutoPathTable(hash);
++			if (hashed && !(hashed->Flag & tTVPFileInfo::EMPTY_FILE)) resolved = hashed->FilePath;
++		}
++		if (!resolved.IsEmpty()) {
++			TVPAutoPathCache.Add(TVPMakeIndependentString(name), TVPMakeIndependentString(resolved));
++			return TVPMakeIndependentString(resolved);
++		}
++#endif
+ 		// not found
+ 		TVPAutoPathCache.Add(TVPMakeIndependentString(name), ttstr());
+ 		return ttstr();
+@@ -1919,6 +2027,19 @@ iTJSDispatch2* TVPGetFilePropertyNoAddRef( const ttstr& name )
+ 
+ // 内部呼び出し用
+ // name は正規化済み
++#ifdef KRKRZ_LLLJ
++static void LLLJInvalidateForWrite(const ttstr &name)
++{
++	tTJSCriticalSectionHolder lock(TVPCreateStreamCS);
++	LLLJStorageEvent("write", name);
++	if (!LLLJIncrementalPaths()) { TVPClearStorageCaches(); return; }
++	TVPClearXP3SegmentCache();
++	TVPAutoPathCache.Clear(); // also discard aliases and cached misses
++	const auto parent = TVPExtractStoragePath(name);
++	if (std::find(TVPAutoPathList.begin(), TVPAutoPathList.end(), parent) != TVPAutoPathList.end())
++		TVPClearAutoPathCache();
++}
++#endif
+ iTJSBinaryStream * _InnerTVPCreateStream(const ttstr &name, tjs_uint32 flags)
+ {
+ 	tjs_uint32 access = flags & TJS_BS_ACCESS_MASK;
+@@ -1969,14 +2090,26 @@ iTJSBinaryStream * _InnerTVPCreateStream(const ttstr &name, tjs_uint32 flags)
+ 	catch(...)
+ 	{
+ #ifndef TVP_DONT_CLEAR_AUTOPATH_CACHE
+-		if(access >= 1) TVPClearStorageCaches();
++		if(access >= 1) {
++#ifdef KRKRZ_LLLJ
++			LLLJInvalidateForWrite(name);
++#else
++			TVPClearStorageCaches();
++#endif
++		}
+ #else
+ 		if(access >= 1) TVPClearXP3SegmentCache();
+ #endif
+ 		throw;
+ 	}
+ #ifndef TVP_DONT_CLEAR_AUTOPATH_CACHE
+-	if(access >= 1) TVPClearStorageCaches();
++	if(access >= 1) {
++#ifdef KRKRZ_LLLJ
++		LLLJInvalidateForWrite(name);
++#else
++		TVPClearStorageCaches();
++#endif
++	}
+ #else
+ 	if(access >= 1) {
+ 		// キャッシュから情報を消して再検索されるようにする
+@@ -2155,6 +2288,10 @@ void TVPClearStorageCaches()
+ 	TVPClearXP3SegmentCache();
+ 	{
+ 		tTJSCriticalSectionHolder cs_holder(TVPCreateStreamCS);
++#ifdef KRKRZ_LLLJ
++		LLLJListings.clear();
++		LLLJStorageEvent("clear", ttstr());
++#endif
+ 		TVPClearAutoPathCache();
+ 	}
+ }
+diff --git a/generic/environ/Application.cpp b/generic/environ/Application.cpp
+index 5d2a42f..b53545e 100644
+--- a/generic/environ/Application.cpp
++++ b/generic/environ/Application.cpp
+@@ -324,9 +324,15 @@ void tTVPApplication::RequestUpdate()
+ /**
+  * イベントキューからすべてのイベントをディスパッチ
+  */
++#ifdef KRKRZ_LLLJ
++#include "lllj_compat.h"
++#endif
+ void
+ tTVPApplication::Dispatch()
+ {
++#ifdef KRKRZ_LLLJ
++	LLLJPollFrameStats();
++#endif
+ 	KRKRZ_RENDER_STATS_SCOPE(TVPRenderStatsAddFrameDispatch);
+ 	try {
+ 		// 送信に失敗してリトライキューに積まれたイベントを再送する。
 diff --git a/sdl3/base/FileImpl.cpp b/sdl3/base/FileImpl.cpp
 index 6fc5501..f9918a0 100644
 --- a/sdl3/base/FileImpl.cpp
@@ -124,3 +401,106 @@ index 6fc5501..f9918a0 100644
  	SDL_PathInfo pathInfo;
  	if (SDL_GetPathInfo(file_path_utf8.c_str(), &pathInfo) && pathInfo.type == SDL_PATHTYPE_FILE) {
  		return static_cast<tjs_uint64>(pathInfo.size);
+diff --git a/sdl3/visual/SDLOGLDrawDevice.cpp b/sdl3/visual/SDLOGLDrawDevice.cpp
+index 38f717a..6d6a6fe 100644
+--- a/sdl3/visual/SDLOGLDrawDevice.cpp
++++ b/sdl3/visual/SDLOGLDrawDevice.cpp
+@@ -27,6 +27,11 @@
+ #endif
+ 
+ #include <algorithm>
++#ifdef KRKRZ_LLLJ
++#include "lllj_compat.h"
++#include "DebugIntf.h"
++#include <chrono>
++#endif
+ 
+ #ifdef KRKRZ_HAS_ELEMENTS
+ #include "elements/ElementsDialogManager.h"
+@@ -71,8 +76,25 @@ tTVPSDLOGLDrawDevice::~tTVPSDLOGLDrawDevice()
+ void TJS_INTF_METHOD tTVPSDLOGLDrawDevice::Show()
+ {
+ 	if (!GLContext) return;
++#ifdef KRKRZ_LLLJ
++	const bool measure = LLLJFpsEnabled();
++	const auto showStart = measure ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
++#endif
+ 
+ 	GLContext->MakeCurrent();
++#ifdef KRKRZ_LLLJ
++	static bool loggedRenderer = false;
++	if (measure && !loggedRenderer) {
++		loggedRenderer = true;
++		auto glString = [](GLenum key) {
++			const auto *value = glGetString(key);
++			return ttstr(value ? reinterpret_cast<const char *>(value) : "unknown");
++		};
++		TVPAddImportantLog(ttstr(TJS_W("(lllj) renderer: vendor=")) + glString(GL_VENDOR) +
++			TJS_W("; renderer=") + glString(GL_RENDERER) + TJS_W("; version=") + glString(GL_VERSION) +
++			TJS_W("; drawthreads=") + ttstr(TVPDrawThreadNum));
++	}
++#endif
+ 	InitPosition();
+ 
+ 	if (ShowVideo()) {
+@@ -124,10 +146,32 @@ void TJS_INTF_METHOD tTVPSDLOGLDrawDevice::Show()
+ 	}
+ #endif // KRKRZ_USE_REPL
+ 
+-	GLContext->Swap();
++#ifdef KRKRZ_LLLJ
++	const auto swapStart = measure ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
++#endif
++	{
++		KRKRZ_RENDER_STATS_SCOPE(TVPRenderStatsAddShowPresent);
++		GLContext->Swap();
++	}
++#ifdef KRKRZ_LLLJ
++	if (measure) {
++		const auto end = std::chrono::steady_clock::now();
++		LLLJPresented(std::chrono::duration_cast<std::chrono::nanoseconds>(end - swapStart).count(),
++			std::chrono::duration_cast<std::chrono::nanoseconds>(end - showStart).count());
++	}
++#endif
+ }
+ 
+ //---------------------------------------------------------------------------
++void tTVPSDLOGLDrawDevice::Recreate()
++{
++	if (!GLContext) return; // The first onResize can precede context creation.
++	GLContext->MakeCurrent();
++	InitPosition();
++	CreateTexture();
++	RequestInvalidation(tTVPRect(0, 0, DestRect.get_width(), DestRect.get_height()));
++}
++
+ void tTVPSDLOGLDrawDevice::DestroyTexture()
+ {
+ 	// invalidate Texture object
+@@ -490,6 +534,14 @@ TJS_END_NATIVE_CONSTRUCTOR_DECL(/*TJS class name*/SDLOGLDrawDevice)
+ //----------------------------------------------------------------------
+ // properties
+ //----------------------------------------------------------------------
++TJS_BEGIN_NATIVE_METHOD_DECL(recreate)
++{
++	TJS_GET_NATIVE_INSTANCE(_this, tTJSNI_SDLOGLDrawDevice);
++	_this->GetDevice()->Recreate();
++	return TJS_S_OK;
++}
++TJS_END_NATIVE_METHOD_DECL(recreate)
++
+ TJS_BEGIN_NATIVE_PROP_DECL(interface)
+ {
+ 	TJS_BEGIN_NATIVE_PROP_GETTER
+diff --git a/sdl3/visual/SDLOGLDrawDevice.h b/sdl3/visual/SDLOGLDrawDevice.h
+index 941e5e5..f41cc36 100644
+--- a/sdl3/visual/SDLOGLDrawDevice.h
++++ b/sdl3/visual/SDLOGLDrawDevice.h
+@@ -101,6 +101,7 @@ public:
+ 
+ 	//---- 表示処理
+ 	virtual void TJS_INTF_METHOD Show();
++	void Recreate();
+ 
+ 	//---- LayerManager からの画像受け渡し関連
+ 	virtual void TJS_INTF_METHOD StartBitmapCompletion(iTVPLayerManager * manager);

@@ -7,6 +7,8 @@ Files named as a bare 64-hex hash (unrecoverable names / the anti-unpack decoy)
 are skipped. Archive member names are the paths relative to SRC_DIR.
 """
 import os
+import argparse
+import json
 import re
 import struct
 import sys
@@ -21,7 +23,12 @@ def chunk(tag, body):
 
 
 def main():
-    src, out = sys.argv[1], sys.argv[2]
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('src')
+    parser.add_argument('out')
+    parser.add_argument('--if-stale', action='store_true')
+    args = parser.parse_args()
+    src, out = args.src, args.out
     files = []
     for root, _, names in os.walk(src, followlinks=True):
         for n in names:
@@ -30,6 +37,16 @@ def main():
             p = os.path.join(root, n)
             files.append((os.path.relpath(p, src).replace(os.sep, '/'), p))
     files.sort()
+    fingerprint = json.dumps({
+        'source': os.path.realpath(src),
+        'files': [(name, os.stat(path).st_size, os.stat(path).st_mtime_ns) for name, path in files],
+    }, ensure_ascii=False, sort_keys=True)
+    stamp = out + '.source.json'
+    if args.if_stale and os.path.isfile(out) and os.path.isfile(stamp):
+        with open(stamp, encoding='utf-8') as f:
+            if f.read() == fingerprint:
+                print('up to date:', out)
+                return
     index = bytearray()
     tmp = out + '.tmp'
     with open(tmp, 'wb') as f:
@@ -47,7 +64,7 @@ def main():
                     size += len(b)
                     f.write(b)
             nm = name.encode('utf-16le')
-            info = struct.pack('<IQQH', 0, size, size, len(name)) + nm
+            info = struct.pack('<IQQH', 0, size, size, len(nm) // 2) + nm
             segm = struct.pack('<IQQQ', 0, off, size, size)
             body = chunk(b'info', info) + chunk(b'segm', segm) + chunk(b'adlr', struct.pack('<I', adler & 0xffffffff))
             index += chunk(b'File', body)
@@ -57,6 +74,9 @@ def main():
         f.seek(len(HEADER))
         f.write(struct.pack('<Q', idx_off))
     os.replace(tmp, out)
+    with open(stamp + '.tmp', 'w', encoding='utf-8') as f:
+        f.write(fingerprint)
+    os.replace(stamp + '.tmp', stamp)
     print('packed', len(files), 'files ->', out)
 
 
