@@ -43,9 +43,15 @@ def verify(out, source):
         advance(session, 1)
         later = session.step("windows_continue_advanced")
         assert (later["scene"], later["cursor"]) != (state["scene"], state["cursor"])
+        # With lllj_zh.pck mounted the save is the game's own (localized) ID and the
+        # restored system settings keep its Chinese text language.
+        assert json.loads(session.ev("kag.saveDataID")) == summary["id"], summary
+        text = session.obj("%[lang: kag.languageType, shown: kag.historyLayer.data[kag.historyLayer.data.count-1].plaintext,"
+                           " line: world_object.player.curText.language[kag.languageType].searchtext]")
+        assert text["lang"] in (1, 2) and text["shown"] == text["line"], text
         known = check_log(session.out / "game.log")
         assert original == {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in source.iterdir() if p.is_file()}
-        session.write_report(passed=True, save_summary=summary, expected_position={"scene": expected["scene"], "point": expected["point"]}, thumbnail=dimensions, known_exceptions=known)
+        session.write_report(passed=True, save_summary=summary, text=text, expected_position={"scene": expected["scene"], "point": expected["point"]}, thumbnail=dimensions, known_exceptions=known)
         print(f"PASS: {session.out}/report.json")
     except Exception as error:
         session.write_report(passed=False, error=str(error))

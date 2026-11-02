@@ -35,7 +35,9 @@ def main():
     root = Path(__file__).resolve().parent.parent
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", nargs="?", type=Path, default=root.parent / "limelight/savedata_zh")
-    parser.add_argument("--target", type=Path, default=Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "limelight_lj")
+    # run.sh gives the Chinese build (lllj_zh.pck mounted) its own directory, like lllj_zh.dll's
+    # SaveDataPath; the Japanese game (-lllj_zh=no) keeps using limelight_lj/ itself.
+    parser.add_argument("--target", type=Path, default=Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "limelight_lj/savedata_zh")
     args = parser.parse_args()
     print(json.dumps(import_saves(args.source, args.target), ensure_ascii=False, indent=2))
 

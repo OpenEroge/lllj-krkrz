@@ -17,6 +17,7 @@
 #include "CharacterSet.h"
 #include "tjsDictionary.h"
 #include "lllj_compat.h"
+#include "movie_subtitles.h"
 
 #include "libyuv/convert_argb.h"
 
@@ -31,6 +32,7 @@ extern "C" {
 #include <condition_variable>
 #include <cstring>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -49,10 +51,12 @@ struct MovieStats {
 	std::atomic<int64_t> opened{0};
 	std::mutex nameLock;
 	std::string name;
-	void Reset(const char *n) {
+	// Chinese patch subtitles (movie_subtitles.cpp): the current player's object
+	std::shared_ptr<LLLJMovieSubtitles> subs;
+	void Reset(const char *n, std::shared_ptr<LLLJMovieSubtitles> s) {
 		frames = 0; dropped = 0; maxLateUs = 0; decodeUs = 0; underrunUs = 0;
 		++opened;
-		std::lock_guard<std::mutex> lk(nameLock); name = n ? n : "";
+		std::lock_guard<std::mutex> lk(nameLock); name = n ? n : ""; subs = std::move(s);
 	}
 };
 MovieStats gStats;
@@ -165,6 +169,7 @@ class tLLLJFFmpegMoviePlayer : public iTVPMoviePlayer
 	OnVideoDecodedPlanes mOnPlanes;
 	bool mUseYUV = false;
 	float mVolume = 1.0f;
+	std::shared_ptr<LLLJMovieSubtitles> mSubs;
 
 public:
 	~tLLLJFFmpegMoviePlayer() override
@@ -248,7 +253,8 @@ public:
 			mADec ? avcodec_get_name(mADec->codec_id) : "none", mAudioRate, mAudioChannels,
 			stream ? " (stream)" : "");
 		Log(info);
-		gStats.Reset(name);
+		mSubs = LLLJMovieSubtitles::Open(name, mWidth, mHeight);
+		gStats.Reset(name, mSubs);
 
 		mStream = stream;   // owned from here on (success)
 		mThread = std::thread(&tLLLJFFmpegMoviePlayer::ThreadMain, this);
@@ -595,7 +601,7 @@ private:
 				if (prepareOnly) {
 					mVideoQ.pop_front();
 					mCurPosUs = vf.ptsUs;
-					Deliver(vf.frame);
+					Deliver(vf.frame, vf.ptsUs);
 					av_frame_free(&vf.frame);
 					std::lock_guard<std::mutex> lk(mMtx);
 					if (mPrepareOnly.load()) {
@@ -623,7 +629,7 @@ private:
 				ReleaseAudio();
 				AtomicMax(gStats.maxLateUs, clk - vf.ptsUs);
 				mCurPosUs = vf.ptsUs;
-				Deliver(vf.frame);
+				Deliver(vf.frame, vf.ptsUs);
 				++gStats.frames;
 				av_frame_free(&vf.frame);
 				lastShown = false;
@@ -650,23 +656,32 @@ private:
 		if (mHoldAudio && mState.load() == stPlaying) { mHoldAudio = false; mSink.Start(); }
 	}
 
-	void Deliver(AVFrame *f)
+	void Deliver(AVFrame *f, int64_t ptsUs)
 	{
 		const int w = f->width, h = f->height;
+		const int64_t ms = ptsUs / 1000;
 		if (mUseYUV && mOnPlanes) {
+			const uint8_t *const src[3] = {f->data[0], f->data[1], f->data[2]};
+			const int srcPitch[3] = {f->linesize[0], f->linesize[1], f->linesize[2]};
+			uint8_t *planes[3] = {f->data[0], f->data[1], f->data[2]};
+			int pitch[3] = {f->linesize[0], f->linesize[1], f->linesize[2]};
+			// subtitles go into a copy: the decoder may still reference this frame
+			if (mSubs && w == mWidth && h == mHeight) mSubs->BlendI420(ms, src, srcPitch, planes, pitch);
 			iTVPMoviePlayer::VideoPlaneFrame p;
 			p.width = w; p.height = h;
 			p.format = iTVPMoviePlayer::VPF_I420;
 			p.planeCount = 3;
-			p.planes[0] = { f->data[0], w, h, f->linesize[0] };
-			p.planes[1] = { f->data[1], (w + 1) / 2, (h + 1) / 2, f->linesize[1] };
-			p.planes[2] = { f->data[2], (w + 1) / 2, (h + 1) / 2, f->linesize[2] };
+			p.planes[0] = { planes[0], w, h, pitch[0] };
+			p.planes[1] = { planes[1], (w + 1) / 2, (h + 1) / 2, pitch[1] };
+			p.planes[2] = { planes[2], (w + 1) / 2, (h + 1) / 2, pitch[2] };
 			mOnPlanes(p);
 		} else if (mOnDecoded) {
-			mOnDecoded(w, h, [f, w, h](char *dest, int pitch) {
+			LLLJMovieSubtitles *subs = (w == mWidth && h == mHeight) ? mSubs.get() : nullptr;
+			mOnDecoded(w, h, [f, w, h, subs, ms](char *dest, int pitch) {
 				// libyuv "ARGB" is B,G,R,A in memory, the layer pixel layout; alpha = 255
 				libyuv::I420ToARGB(f->data[0], f->linesize[0], f->data[1], f->linesize[1],
 					f->data[2], f->linesize[2], (uint8_t *)dest, pitch, w, h);
+				if (subs) subs->BlendBGRA(ms, (uint8_t *)dest, pitch);
 			});
 		}
 	}
@@ -706,6 +721,19 @@ LLLJ_NATIVE(movieStats) {
 		std::lock_guard<std::mutex> lk(gStats.nameLock);
 		tTJSVariant name(FromUtf8(gStats.name));
 		d->PropSet(TJS_MEMBERENSURE, TJS_W("name"), nullptr, &name, d);
+		// Chinese patch subtitles: file, events, most images in one frame, slowest render
+		if (gStats.subs) {
+			iTJSDispatch2 *s = TJSCreateDictionaryObject();
+			tTJSVariant file(FromUtf8(gStats.subs->Name()));
+			s->PropSet(TJS_MEMBERENSURE, TJS_W("file"), nullptr, &file, s);
+			SetStat(s, TJS_W("events"), gStats.subs->Events());
+			SetStat(s, TJS_W("images"), (double)gStats.subs->images);
+			SetStat(s, TJS_W("max_images"), (double)gStats.subs->maxImages);
+			SetStat(s, TJS_W("max_render_ms"), gStats.subs->maxRenderUs / 1000.0);
+			tTJSVariant sv(s, s);
+			s->Release();
+			d->PropSet(TJS_MEMBERENSURE, TJS_W("subtitle"), nullptr, &sv, d);
+		}
 	}
 	if (result) *result = tTJSVariant(d, d);
 	d->Release();

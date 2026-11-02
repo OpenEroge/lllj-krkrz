@@ -25,6 +25,20 @@ ttstr LLLJHxFilename(const ttstr &leaf);
 void LLLJStorageEvent(const char *kind, const ttstr &path);
 bool LLLJIncrementalPaths();
 ttstr LLLJSaveAssetFallback(const ttstr &leaf);
+// Chinese patch (src/xpck.cpp). LLLJOverlayLookup: 1 = out is the pack path,
+// 2 = out is the redirected name to look up instead, 0 = unchanged.
+void LLLJZhInit(); // after the command line is parsed: mount unless -lllj_zh=no
+bool LLLJZhEnabled();
+ttstr LLLJZhRedirect(const ttstr &leaf);
+int LLLJOverlayLookup(const ttstr &name, ttstr &out);
+ttstr LLLJOverlayLeaf(const ttstr &leaf); // pack path of leaf, or empty
+bool LLLJZhReadFile(const ttstr &leaf, std::vector<unsigned char> &data);
+
+// WebP under .png names (src/webp.cpp); false when the stream is not WebP
+#include "GraphicsLoaderIntf.h"
+bool LLLJLoadWebP(tTVPGraphicSizeCallback sizecallback, tTVPGraphicScanLineCallback scanlinecallback,
+	void *callbackdata, iTJSBinaryStream *src, tTVPGraphicLoadMode mode);
+bool LLLJLoadHeaderWebP(iTJSBinaryStream *src, iTJSDispatch2 **dic);
 
 #define LLLJ_NATIVE(name) \
 	static tjs_error lllj_native_##name(tTJSVariant *result, tjs_int numparams, \

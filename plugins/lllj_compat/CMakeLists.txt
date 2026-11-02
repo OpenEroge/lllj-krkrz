@@ -68,9 +68,14 @@ foreach(lib avformat avcodec avutil)
 endforeach()
 set(CMAKE_BUILD_RPATH ${CMAKE_BUILD_RPATH} "\$ORIGIN" PARENT_SCOPE)
 
+# System libraries for the Chinese patch: zstd (lllj_zh.pck, src/xpck.cpp), libwebp
+# (WebP images stored as .png in the pack) and libass (OP/ED subtitles).
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(LLLJ_PC REQUIRED IMPORTED_TARGET GLOBAL libzstd libwebp libass)
+
 set(KRKRZ_SRC_ADD ${KRKRZ_SRC_ADD} ${LLLJ_SRC} ${LLLJ_EMOTE_SRC} ${LLLJ_LAYEREXDRAW_SRC} ${LLLJ_TEXTRENDER_SRC}
     ${LLLJ_PLUTOVG_SRC} ${LLLJ_DSPFILTERS_SRC} PARENT_SCOPE)
-set(KRKRZ_LIB_ADD ${KRKRZ_LIB_ADD} ${LLLJ_FFMPEG_LIBS} PARENT_SCOPE)
+set(KRKRZ_LIB_ADD ${KRKRZ_LIB_ADD} ${LLLJ_FFMPEG_LIBS} PkgConfig::LLLJ_PC PARENT_SCOPE)
 set(KRKRZ_INC ${KRKRZ_INC} ${LLLJ_DIR}/src ${CMAKE_CURRENT_BINARY_DIR}
     ${LLLJ_DIR}/shim ${LLLJ_DIR}/emote/shim ${LLLJ_DIR}/emote ${CMAKE_SOURCE_DIR}/src/plugins
     ${LLLJ_FFMPEG_DIR}/include ${LLLJ_DIR}/third_party/DSPFilters/include

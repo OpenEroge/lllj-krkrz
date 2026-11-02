@@ -24,7 +24,8 @@
 
 仓库只跟踪我们自己的代码。`krkrz_dev/`、`ref/`、`game/`、`decomp/` 都在 `.gitignore` 里：
 - 引擎源码：按 `patches/UPSTREAM.txt` clone 到固定 commit 并打补丁；
-- 运行目录：`tools/setup_game.sh`（默认使用同级的 `../limelight/result/`；要求其中有 `unencrypted/`，生成 `patch.xp3` 和含 53 个 pimg 的 `patch2.xp3`；来源大小/时间变化时重打包）；
+- 运行目录：`tools/setup_game.sh`（默认使用同级的 `../limelight/result/`；要求其中有 `unencrypted/`，生成 `patch.xp3` 和含 53 个 pimg 的 `patch2.xp3`；来源大小/时间变化时重打包；
+  游戏目录里有汉化包 `lllj_zh.pck` 时链接为 `game/lllj_zh.pck`，原地读取，不解包）；
 - 脚本反汇编：`tools/tjsdis.py --tree` / `tools/fefe.py --tree`。
 
 ## 构建
@@ -39,7 +40,8 @@ tools/build.sh                         # Release + KRKRZ_DRAW_STATS=ON
 首次 configure 会通过 vcpkg 编译依赖（约 10 分钟）。视频后端用的 FFmpeg 不编译：`tools/build.sh` 先调用 `tools/fetch_ffmpeg.sh`，
 下载 [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) 的 8.1 LGPL shared 预构建包到 `third_party/ffmpeg/`（固定 tag + sha256，tarball 保留在目录里；
 BtbN 会清理旧 autobuild，失效时换成新的 n8.1 lgpl-shared 资源并更新脚本里的三个常量）。`run.sh` 把 `libav*`/`libswresample` 复制进 `game/`，
-可执行文件的 `$ORIGIN` RPATH 保证用的是这份而不是系统同 soname 的库。系统包：`Mesa-libGLESv2-devel Mesa-libGLESv3-devel yasm systemd-devel libdecor-devel`。
+可执行文件的 `$ORIGIN` RPATH 保证用的是这份而不是系统同 soname 的库。系统包：`Mesa-libGLESv2-devel Mesa-libGLESv3-devel yasm systemd-devel libdecor-devel`，
+汉化另需 pkg-config 能找到的 `libzstd`、`libwebp`、`libass`（开发包；运行时用系统共享库）。
 
 ## 运行
 
@@ -50,14 +52,23 @@ REPLCH=/some/dir ./run.sh     # 打开 REPL 文件通道（tools/repl.sh 用）
 ```
 
 `run.sh` 会把可执行文件复制进 `game/`（游戏用 `System.exePath` 找 `patch.xp3` 和 `plugin64/` 占位 DLL），
-并带上 `-used2d=no -debugwin=no`。存档默认在 `${XDG_DATA_HOME:-$HOME/.local/share}/limelight_lj/`，
-可用 `./run.sh -datapath=/absolute/path/` 覆盖。
+并带上 `-used2d=no -debugwin=no`。
+
+默认以汉化版运行（等同 `lllj_zh.exe`）：读取 `game/lllj_zh.pck`，日/简/繁可在游戏内切换，OP/ED/MV 有对应语言字幕。
+`./run.sh -lllj_zh=no` 运行纯日文版；`-lllj_zh=/path/lllj_zh.pck` 指定包的位置。
+存档：汉化版在 `${XDG_DATA_HOME:-$HOME/.local/share}/limelight_lj/savedata_zh/`（对应原 DLL 的 `savedata_zh`），
+日文版在上一级 `limelight_lj/`；可用 `./run.sh -datapath=/absolute/path/` 覆盖。
+
+语言切换：标题右上角的「文/あ」按钮（汉化包自带）在日文和简体之间切换界面与正文；
+**Alt+L** 在任何画面打开汉化包的语言面板（日本語 / 简体中文 / 繁體中文），代替 Windows 菜单栏的「文本语言」，切换正文语言。
+在标题画面选繁体时界面保持简体（汉化包只有简体界面图）。
 
 首次导入使用显式命令，保留来源且跳过目标中已有的文件：
 
 ```bash
-python3 -I tools/import_saves.py                         # 默认导入 ../limelight/savedata_zh/
+python3 -I tools/import_saves.py                         # 默认把 ../limelight/savedata_zh/ 导入 limelight_lj/savedata_zh/
 python3 -I tools/import_saves.py /path/to/old/saves       # 也可导入原生旧目录
+python3 -I tools/import_saves.py ~/.local/share/limelight_lj   # 批次 6 之前导入到 limelight_lj/ 的汉化存档
 ```
 
 Alt+Enter 切换全屏；缩放和右键返回已回归。系统操作使用游戏内系统栏和设置页。
@@ -87,8 +98,15 @@ Alt+Enter 切换全屏；缩放和右键返回已回归。系统操作使用游�
     `LLLJNative.waveFilterGain(filter, hz)` 离线测幅频响应（测试用）。
   - `multitrack.cpp`：`.mchx` 多轨 BGM 解码器（清单里的多声道 opus 按 `track` 声道对混成立体声，各轨增益可渐变），
     `WaveSoundBuffer.multiTrackOpenCallbacks` / `setMultiTrackMask`（`MultiTrackMusicSupport` 用）。
+  - `xpck.cpp`：汉化包（lllj_zh.dll 的替代）。`lllj_zh.pck`（XPCK：zstd 索引 + 2MiB zstd 分段）注册为 `xpck://` 存储；
+    无路径的文件名先查 DLL 内嵌配置里的 `RedirectTable`（`title_bg*.mtn` 按 UI 语言、`*.ass` 按正文语言），再查包，包优先于所有 autopath。
+    `LLLJNative.zhEnabled()` / `zhRedirect(name)`。
+  - `webp.cpp`：包里 123 个伪装成 `.png` 的 WebP（libwebp），由 PNG 加载器先行嗅探（原 DLL 也是 hook `TVPLoadPNG`）。
+  - `movie_subtitles.cpp`：OP/ED/MV 字幕。视频名 → `.ass` → 重定向到 `_chs/_cht`，libass 渲染后混合进 I420 帧的副本（GPU YUV 路径）或 BGRA（layer 模式），
+    字体为包里的两款（只注册给 libass）。`LLLJNative.movieStats().subtitle` 给出文件、事件数、单帧最多图像数和最长渲染耗时。
 - **引擎补丁**：大小写回退、auto-path 增量索引、正常查找失败后的 Hxv4 文件名回退、SDLOGL 计时和 `recreate()` 兼容入口、
-  外部视频播放器工厂钩子、VideoOverlay 的 `setPeriodEvent` / `setSegmentLoop`。游戏专用改动由 `KRKRZ_LLLJ` 控制。
+  外部视频播放器工厂钩子、VideoOverlay 的 `setPeriodEvent` / `setSegmentLoop`、汉化包查找钩子（`TVPGetPlacedPath`）、PNG 加载器的 WebP 嗅探、
+  内存池在压力回调前释放锁（原先大文件进存储缓存时会自锁死）。游戏专用改动由 `KRKRZ_LLLJ` 控制。
 
 ## 工具
 
@@ -99,6 +117,7 @@ Alt+Enter 切换全屏；缩放和右键返回已回归。系统操作使用游�
 | `tools/pbd_decode.py` | `.pbd` / Windows JPEG 存档解码，独立 Python 参照实现 |
 | `tools/psbdump.py` | PSB（pimg/mtn/scn）结构和资源查看 |
 | `tools/xp3plain.py` | 目录打包为明文 XP3 |
+| `tools/xpck_unpack.py` | 汉化包 `lllj_zh.pck` 列表 / 解出 / 文本解码（只用于查看和测试） |
 | `tools/iterate.sh` | 编译 + 无头运行 N 秒 + 抓报错 |
 | `tools/smoke.sh` / `tools/savetest.sh` | 完整场景回归，含普通/快速存读档断言 |
 | `tools/benchmark.py` | 1080p 标题、对话各 30 秒及 10 轮转场；`--emote` 测 SD、标题开场、eyecatch；`--movie` 测 OP/ED 播放 |
@@ -129,6 +148,8 @@ python3 -I tools/benchmark.py artifacts/movie-desktop-01 --movie --desktop
 python3 -I tools/emote_compare.py artifacts/compare-01      # Wine 原版 vs 移植，需要 wine/Xvfb/ImageMagick
 python3 -I tools/scenarios.py artifacts/audio-01 --only audio   # 语音特效 + 多轨 BGM
 python3 -I tools/scenarios.py artifacts/extras-01 --only extras # 批次 5：流程图/颜色轮盘/条纹转场/图集字体/转场插件
+python3 -I tools/scenarios.py artifacts/zh-01 --only zh         # 批次 6：汉化包、语言切换、WebP、OP 字幕
+python3 -I tools/scenarios.py artifacts/smoke-jp-01 --engine-arg=-lllj_zh=no   # 纯日文版
 ```
 
 Smoke 覆盖正常启动/Logo、标题、新游戏推进、backlog、存读档、CG/SD/音乐/立绘鉴赏入口、10 个设置分页、全屏/缩放、右键返回。
@@ -140,7 +161,11 @@ E-mote 后端可用 `-lllj_emote=cpu|gl` 强制；`LLLJNative.emoteStats()` 返�
 （有输出、尾音长度符合 `extend`）、语音缓冲的 `语音|特效` 路径和口型电平、14 个 `.mchx` 的打开回调与静音/恢复。
 `--only extras`：流程图连线、颜色轮盘色相、手柄设置页、backlog 条纹转场计时、`fetchImageSize`/`saveOctet`/`getKnownFolderPath`、
 mosaic/turn 及 extNagano 六种转场（`tools/emote_test.ks` 标签）。
-任何 `exception occured`、REPL 失败和超时都返回非零（不再有已知例外）；`(lllj) stub:` 只允许 `scenarios.py` 的 `WIN32_STUBS`
+`--only zh`：包已挂载、标题为中文动画（`xpck://./title_bg_cn.mtn`）、标题按钮切到日文再切回、Alt+L 面板选繁体（界面保持简体）、
+WebP 尺寸和像素、新游戏正文/backlog 为所选语言、游戏中切回简体即时生效、OP 依次以简/繁/日播放（字幕文件分别为 `op_chs`/`op_cht`/无）。
+默认各组都在汉化版下运行。
+任何 `exception occured`、REPL 失败和超时都返回非零，只有 `scenarios.py` 的 `KNOWN_CAUGHT` 例外：汉化包脚本自己 try/catch 的两处
+（引擎在抛出处记日志，原版引擎不记）；汉化包每次启动的防倒卖提示（`KNOWN_DIALOGS`）也允许；`(lllj) stub:` 只允许 `scenarios.py` 的 `WIN32_STUBS`
 （`setDpiAwareness`、`readRegValue`、`setIconicPreview`，均为 Windows 专有、无对应功能），`msdfrender not linked` 也算失败。
 `tools/emote_compare.py` 除 E-mote 外还对照流程图、设置页、mosaic/turn/条纹转场中途和名字栏（系统画面用 `kag.sysbase` 的 `piledCopy` 截取）。
 
@@ -161,10 +186,11 @@ mosaic/turn 及 extNagano 六种转场（`tools/emote_test.ks` 标签）。
 
 能用：启动 → ATTENTION → 标题菜单 → はじめから → 序章；背景、事件 CG（pimg 差分）、立绘、头像窗、对话框文字、名字栏、
 rule 转场、BGM（opus）、语音（ogg）、快存/快读（含缩略图）；E-mote（批次 2）；OP/ED 视频（批次 3）；
-语音特效与多轨 BGM（批次 4）；流程图、颜色选择器、系统条纹转场、图集字体、手柄（批次 5）。
+语音特效与多轨 BGM（批次 4）；流程图、颜色选择器、系统条纹转场、图集字体、手柄（批次 5）；
+汉化：中文标题/界面/正文、日简繁热切换、OP/ED/MV 字幕、汉化存档（批次 6）。
 
 未做（按计划后续处理）：
-- 汉化补丁（批次 6）、60Hz 优化（批次 7）、glibc 2.31 发行构建。
+- 60Hz 优化（批次 7）、glibc 2.31 发行构建。
 
 批次 1 已修复 `SetupFullHDMovie` / `onResize`，挂载去码包并补齐存档、索引和测试基础设施。
 16 个无名文件保留哈希名，通过 Hxv4 回退查找；原始名字仍未恢复。

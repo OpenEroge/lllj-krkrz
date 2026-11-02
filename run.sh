@@ -37,11 +37,26 @@ for pd in plugin plugin64; do
 		: > "$GAME/$pd/$d.dll"
 	done
 done
+# Chinese patch (lllj_zh.pck, read by plugins/lllj_compat/src/xpck.cpp); -lllj_zh=no
+# runs the Japanese game. tools/setup_game.sh links it; this covers older game/ dirs.
+if [[ ! -e "$GAME/lllj_zh.pck" && -f "$LLLJ/../limelight/lllj_zh.pck" ]]; then
+	ln -s --relative "$LLLJ/../limelight/lllj_zh.pck" "$GAME/lllj_zh.pck"
+fi
 ARGS=("$GAME/" -loglevel=INFO -used2d=no -debugwin=no)
 HAS_DATAPATH=false
-for ARG in "$@"; do [[ "$ARG" == -datapath=* ]] && HAS_DATAPATH=true; done
+ZH=false
+[[ -e "$GAME/lllj_zh.pck" ]] && ZH=true
+for ARG in "$@"; do
+	[[ "$ARG" == -datapath=* ]] && HAS_DATAPATH=true
+	[[ "$ARG" == -lllj_zh=no ]] && ZH=false
+done
 if ! "$HAS_DATAPATH"; then
-	ARGS+=("-datapath=${XDG_DATA_HOME:-$HOME/.local/share}/limelight_lj/")
+	# The Chinese build keeps its own saves (lllj_zh.dll's SaveDataPath, savedata_zh).
+	if "$ZH"; then
+		ARGS+=("-datapath=${XDG_DATA_HOME:-$HOME/.local/share}/limelight_lj/savedata_zh/")
+	else
+		ARGS+=("-datapath=${XDG_DATA_HOME:-$HOME/.local/share}/limelight_lj/")
+	fi
 fi
 if [ -n "${REPLCH:-}" ]; then
 	mkdir -p "$REPLCH"

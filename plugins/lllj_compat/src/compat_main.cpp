@@ -67,6 +67,7 @@ iTJSDispatch2 *CreateLLLJNative(iTJSDispatch2 *global)
 		};
 		static TraceLifetime traceLifetime;
 	}
+	LLLJZhInit(); // Chinese patch pack (xpck.cpp): options are available from here on
 	iTJSDispatch2 *obj = TJSCreateDictionaryObject();
 	for (auto &m : LLLJMethods()) {
 		iTJSDispatch2 *f = new tFuncObj(m.fn);

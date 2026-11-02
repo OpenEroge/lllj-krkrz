@@ -12,7 +12,8 @@
 批次 3 已实现：OP/ED 视频由 `plugins/lllj_compat/src/FFmpegMoviePlayer.cpp`（预构建 FFmpeg，`tools/fetch_ffmpeg.sh`）播放，验收数据见 `PLAN.md` 批次 3。
 批次 4 已实现：语音特效（带通/延迟/混响，`src/wave_filters.cpp`）与多轨 BGM `.mchx`（`src/multitrack.cpp`），验收数据见 `PLAN.md` 批次 4。
 批次 5 已实现：layerExDraw（流程图、颜色选择器）、layerStwCopy（系统条纹转场）、msdfrender（图集字体）、PackinOne 缺口和手柄，验收数据见 `PLAN.md` 批次 5。
-**后续**：汉化和完整 60Hz 优化仍按各自批次处理。
+批次 6 已实现：默认以汉化版运行（`src/xpck.cpp` 原地读 `lllj_zh.pck`、重定向表、WebP、libass 字幕），日/简/繁热切换（标题按钮 + Alt+L 语言面板），验收数据见 `PLAN.md` 批次 6。
+**后续**：完整 60Hz 优化（批次 7）。
 
 ## 2. 关键路径
 
@@ -27,7 +28,8 @@
 | 脚本查阅 | `decomp/data|patch/**/*.dis`（字节码反汇编）、`decomp/text/`（解密后的 .ks/.tjs/.toml 文本） |
 | 参考实现 | `ref/krkr-ns`（MIT，最重要：emoteplayer/视频/layerexdraw 都在 `krkrsdl2/src/plugins` 和 `core/visual/sdl2`）、`ref/msgtool_tjs_ns0.rs`（GPL，只当格式说明） |
 | 上次 krkrsdl2 尝试的计划 | `~/.claude/plans/https-github-com-krkrsdl2-krkrsdl2-linu-functional-flamingo.md`（插件矩阵、汉化包分析，可参考） |
-| 存档 | `${XDG_DATA_HOME:-$HOME/.local/share}/limelight_lj/`；测试各自用输出目录内的 `saves/` |
+| 存档 | 汉化版 `${XDG_DATA_HOME:-$HOME/.local/share}/limelight_lj/savedata_zh/`，日文版（`-lllj_zh=no`）`limelight_lj/`；测试各自用输出目录内的 `saves/` |
+| 汉化包 | `<游戏目录>/lllj_zh.pck` → `game/lllj_zh.pck`（链接）；`tools/xpck_unpack.py` 查看内容，字节码脚本用 `tools/tjsdis.py --tree` 反汇编 |
 | 预构建 FFmpeg | `third_party/ffmpeg/`（不进 git；`tools/fetch_ffmpeg.sh` 下载，`tools/build.sh` 自动调用） |
 | 验收产物 | `artifacts/`（不进 git）；每个运行目录有 `report.json`、`game.log`、截图和私有 REPL |
 
@@ -92,6 +94,11 @@ python3 -I tools/verify_windows_saves.py artifacts/win-01
   `.mchx` 由注册的 wave decoder 处理，打开时回调 `WaveSoundBuffer.multiTrackOpenCallbacks`（脚本据此拿到 `mtrack_id`），
   `setMultiTrackMask(id, name|void, vol, ms)` 改各轨增益。`setDelayMultiTrackMask` 未实现，脚本用 typeof 检测后退化为立即切换。
 
+- **汉化**（`src/xpck.cpp`、`src/webp.cpp`、`src/movie_subtitles.cpp`）：替代 Detours 注入的 `lllj_zh.dll`，配置（重定向表、字幕表、字幕字体）照抄其内嵌 JSON。
+  查找钩子在 `TVPGetPlacedPath` 开头（无路径名：重定向 → 包）和 leaf 搜索前（包），所以包优先于所有 autopath；重定向在主线程按当前语言求值、结果不进缓存。
+  包在 `CreateLLLJNative`（命令行已解析）之后才挂载，`-lllj_zh=no` 关闭。语言切换：标题按钮是包自带的；Alt+L（prelude `lllj_toggleLanguagePanel`）
+  复用包的 `LanguageSelectPanel`，游戏中只切正文语言。包只有 jp/cn 界面图，UI 语言永远不要设成 tw。
+
 ## 5. 踩过的坑（都已解决，别再踩）
 
 1. **`kirikiriz_generic`**：krkrz 的 SysInitScript 定义了全局常量 `kirikiriz_generic=1`，游戏会当成主机版（忽略 `Plugins.link`、开 Switch UI、xp3 当文件夹）。
@@ -146,6 +153,8 @@ python3 -I tools/verify_windows_saves.py artifacts/win-01
     - ScopeKey 按 start_ip 和名字指针缓存；挂调试器时照旧每次计算。
     桌面快进 CPU 从约 171–183% 降到 91–93%，快进速度 23.4→26.4 句/s；不同分片设置下渲染输出逐字节一致。
     测量脚本见 `tools/perf/README.md`（perf 在本环境不可用，改用 schedstat + gdb 抽样）。
+21. **内存池自锁**：`TVPPooledAllocator::allocate` 原来持锁调用内存压力回调，回调清存储缓存又进 `free()` → 同线程死锁（汉化字体进缓存时必现，表现为启动卡在字体许可证日志之后）。已改为释放锁后回调。
+22. **TJS 小坑**：`isvalid void` 为真（判断对象已释放要先看 `typeof`）；`Layer.getMainPixel` 不带 alpha。
 
 ## 6. 当前已知问题（详见 PLAN.md 对应批次）
 
@@ -153,12 +162,12 @@ python3 -I tools/verify_windows_saves.py artifacts/win-01
 |---|---|
 | eyecatch 在桌面平均约 70fps，但最长帧约 38ms（1080p 读回+转换、首次贴图上传）；无 GPU 时约 20fps | 批次 7 |
 | 视频期间桌面最长呈现间隔 26–28ms（>25ms）；真实声卡下的音画同步尚待人工实听 | 批次 7 |
-| 视频字幕（汉化版 `.ass`）未接；接入点是 `FFmpegMoviePlayer.cpp` 的 `Deliver` | 批次 6 |
 | 延迟的 dry/wet 语义（按 STK 习惯交叉淡化）和混响电平尚未与 Wine 原版实听对比；多轨按各轨直接相加，部分素材（`rgb_live`）相加后超过 0dBFS | 批次 4 人工复核 |
 | 鉴赏音乐页频谱提示「fftgraph.dllがありません」：原版游戏目录里也没有 fftgraph.dll，行为与原版一致，未实现 | 不做 |
-| 正文行距与原版不同（原版两行间多一行空行，点击等待图标位置不同），批次 5 对照发现，TextRender 相关 | 批次 6 |
 | 手柄只在无头环境验证了设置页和 `-joypad=dinput` 分支；实体手柄的按键/摇杆需在桌面 `./run.sh` 人工确认 | 批次 5 人工复核 |
-| 汉化 UI、字幕及语言切换尚未挂载；读汉化存档不等于完成汉化 | 批次 6 |
+| 汉化版画面未能与 Wine 下的 `lllj_zh.exe` 逐张对照（日文版对照已一致）：它在 Xvfb 的 Wine 里因 `Direct3DCreate9() failed` 停在对话框 | 批次 8 对照 |
+| 汉化版启动有两处由包脚本自己 try/catch 的异常日志（`KNOWN_CAUGHT`），原版日志里没有；推断是引擎记日志的差异 | 已评估 |
+| 日简繁之外，汉化包的窗口菜单（双语显示、帮助等）没有入口；朗读（SAPI）不支持 | 不做 |
 | 转场仍有布局/软件合成耗时；完整 60Hz 需后续场景实测 | 批次 7 |
 | 上游 `tTVPSoundBuffers::ReschedulePendingLabelEvent` 无锁读 `EventThread`，而 `RemoveBuffer` 可能同时 delete 它（另一个竞态，未修） | 待定 |
 

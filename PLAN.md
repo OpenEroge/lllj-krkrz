@@ -250,25 +250,44 @@ E-mote 自动改用 CPU 光栅化，不是 60Hz 的目标环境，只作回归�
 
 目标：中文正文、UI、标题动画、字幕；日/简/繁游戏内热切换；可读 Windows 汉化版存档。
 
-- [ ] **解包 `lllj_zh.pck`**：自定义 `XPCK` 容器（头 `XPCK 00000001`，索引/数据段为 zstd），约 508 个文件。写 `tools/xpck_unpack.py`
-      （上次 krkrsdl2 会话已成功解过，格式：`File/info/segm` 风格索引 + zstd 段）。输出到 `<游戏目录>/result/zh/`（新目录，不碰原有数据）。
-- [ ] 内容（上次分析）：改过的 `default.tjs`（`CUSTOM_MULTILANG=1`）、`multilang.tjs`、`uitext.tjs`、`AppConfig.tjs`、`*_cn.pbd`、`uitexts_cn.toml`、
-      思源字体、`title_bg*_cn.mtn`、带日简繁三语的 138 个 `.scn`、OP/ED 的 `.ass` 字幕。
-      其中一批伪装成 `.png` 的 WebP（上次统计 35/123，需重新确认）：离线转成真 PNG，或给引擎加 WebP 解码（libwebp）。
-- [ ] **挂载**：打成 `game/patch3.xp3`（排在去码包之后）或在 prelude 里 `Storages.addAutoPath` 最后挂，保证中文文件优先。
-      `yuzu_patchdetect.tjs` 的联网更新检查强制关闭。
-- [ ] **语言重定向**（原 DLL 的 `Multilang.RedirectTable`）：按当前语言把 `title_bg*.mtn` → `*_cn.mtn`、`*.ass` → `_chs/_cht` 等。
-      实现方式：prelude 里包 `Storages` 查找，或在 `lllj_compat` 里注册一个存储介质 / 查找钩子；语言值从 `multilang.tjs` 的切换回调拿。
-      先在 Wine 下跑 `lllj_zh.exe` 观察它重定向了哪些文件（`-forcelog=yes` 的日志里能看到读取的文件名）。
-- [ ] **视频字幕**：在批次 3 的 FFmpeg 后端（`FFmpegMoviePlayer.cpp` 的 `Deliver`，I420 平面）里接 libass，按语言叠加 `.ass`（原 DLL 就是这么做的）；
-      注意 `SelectMovieFile` 已有 `SelectLangMovieFile` 钩子。或退而求其次用离线烧录版本。
-- [ ] 汉化组鸣谢画面、中文字体回退（无字形时）、竖排/注音等文字细节（TextRender 的 ruby、换行禁则：上次发现单独的「。」会被折到新行；
-      批次 5 对照发现正文行距与原版不同：原版两行之间多一行空行，见 `artifacts/batch5-compare/png/*_namebox_1500.png`）。
-- [ ] 存档：导入 `<游戏目录>/savedata_zh/`，读档验证。
+调研结论：日文原版本身就带柚子社的多语言框架（`CUSTOM_MULTILANG=0` 关闭）；汉化包换掉 16 个字节码脚本（`default.tjs` 打开开关）并提供三语 `.scn`、`*_cn` 界面、字体和字幕。
+`lllj_zh.dll` 是 Detours 注入 DLL，不是插件，行为全由内嵌 JSON（`.rsrc` RVA 0x29b0f0）决定：挂载 pck（打开文件时优先于 xp3）、`RedirectTable`、
+hook `TVPLoadPNG` 解 WebP、`-datapath` 改成 `savedata_zh`、视频字幕（libass）。其余（代码页 932、`TaskDialog`、窗口图标、软电池 DRM 检测）为 Windows 专有。
+
+- [x] **XPCK 格式与工具**：`XPCK` + 偏移 10 处 u32 索引位置；索引尾 `u8 方法 + u64 压缩/原始大小` + zstd；`File{info,segm}` 块，名字只有文件名，
+      文件按 2MiB 分段、每段一个 zstd 帧（段可共享）。508 个文件，147 个 `.png` 中 123 个是 WebP。`tools/xpck_unpack.py` 用于列表/解出/文本解码，运行时不解包。
+- [x] **挂载**（`src/xpck.cpp`）：原地读 `game/lllj_zh.pck`（`setup_game.sh`/`run.sh` 链接），注册 `xpck://`。引擎补丁在 `TVPGetPlacedPath` 开头处理无路径名
+      （先重定向，再查包，包优先于所有 autopath，与 DLL 一致），不存在的完整路径在退回 leaf 搜索时也先查包。`-lllj_zh=no` 为纯日文版，`-lllj_zh=<path>` 指定包。
+- [x] **语言重定向**：DLL 配置原样搬进 C++ 表：`title_bg*.mtn` 按 `SystemConfig.uiLanguageType`（`Eval:1`）、11 个 `.ass` 按 `kag.languageType`（`Eval:0`），
+      每次查找都在主线程求值（其他线程用最后的值），因此热切换后下一次打开即生效。
+- [x] **WebP**（`src/webp.cpp`）：PNG 加载器（含 header）先嗅探 `RIFF....WEBP`，libwebp 解码，与 DLL 的 `TVPLoadPNG` hook 等价。
+- [x] **视频字幕**（`src/movie_subtitles.cpp`）：视频名 → `.ass`（DLL 的 `Subtitles` 表）→ 重定向；字体为包里的 `MO UDShinGo SC Gb4 DB`、`等距更纱黑体 SC SemiBold`
+      （只注册给 libass，回退 fontconfig）。GPU YUV 路径混合进 I420 副本（BT.601，与 GL presenter/libyuv 一致），layer 模式混合进 BGRA。日文无字幕（`Map[0]=null`）。
+- [x] **语言切换入口**：标题右上「文/あ」是包自带的（jp↔cn，界面与正文一起）。Windows 菜单栏的「文本语言」在这里没有，改为 **Alt+L** 打开包里的
+      `LanguageSelectPanel`（原本只在标题内部可达）：游戏中只切正文语言（同菜单）；标题上同时经标题自己的 `changeLanguage` 切界面——繁体正文配简体界面，
+      因为包里只有 jp/cn 界面图（UI 语言设成 tw 会因 `title_tw.pbd` 不存在而报致命错误）。
+- [x] **存档**：汉化版存档目录 `limelight_lj/savedata_zh/`（`run.sh`，对应 DLL 的 SaveDataPath），`import_saves.py` 默认导入到此；存档 ID 就是游戏自己的汉化 ID。
+- [x] **其他**：更新检查（`yuzu_patchdetect.tjs`）经 `SystemConfig.noPatchDetect` 关闭；包的防倒卖提示照原样每次启动显示。
+      `kag.speechPlugin` 只有 Windows 朗读（SAPI）时才创建，包里的 `UpdateTextSpeechMenuCheck()` 无保护读取，prelude 给 `KAGWindow` 补了读作 void 的属性。
+- [x] **引擎修复**：`TVPPooledAllocator::allocate` 在持锁时触发内存压力回调，回调清存储缓存会再进 `free()` 自锁死；汉化包的大字体（约 200MB）进缓存时必现。改为释放锁后回调。
+- [x] 文字细节：批次 5 记下的行距/点击等待图标差异已不存在——`python3 -I tools/emote_compare.py artifacts/batch6-compare --port-arg=-lllj_zh=no`
+      的名字栏对照与 Wine 原版一致（两行间空行、图标位置）；汉化正文同样有段间空行。「。」单独折行（krkrsdl2 时期的记录）这次没有专门复现。
+      汉化版本身无法在 Wine 里对照：`lllj_zh.exe` 在 Xvfb 的 Wine 下因 `Direct3DCreate9() failed` 停在对话框（批次 8 在有 GPU 的 Wine 下补做）。
 
 验收：中文标题→新游戏→正文/选项/backlog 全中文；设置里切换日/简/繁即时生效；OP/ED 有对应语言字幕；汉化版存档可读。
 
----
+### 批次 6 验收记录（2026-11-03）
+
+- 新场景：`python3 -I tools/scenarios.py artifacts/batch6-zh --only zh`（多次连续通过，`artifacts/batch6-zh{,-2}/`）：包已挂载、启动即简体（`[1,1]`）、
+  标题为 `xpck://./title_bg_cn.mtn`；标题按钮切日文（`title_bg.mtn` 回到原文件、`op.ass` 无）再切回；Alt+L 面板选繁体（`[2,1]`，`op.ass` → `op_cht.ass`）；
+  WebP 背景尺寸 2120×1280、像素与 `dwebp` 一致；新游戏正文与 backlog 为繁体、游戏中切简体即时生效；OP 依次简/繁/日播放，字幕分别为 `op_chs`/`op_cht`/无
+  （首句时刻单帧 6 个图像，最长渲染约 4ms）；MV1（只在包里）字幕 `mv1_chs`。
+- Windows 汉化存档：`python3 -I tools/verify_windows_saves.py artifacts/batch6-winsave`，ID `{0F527B2E…}`，恢复到预期场景/位置并推进，正文为简体。
+- 回归（默认汉化版）：`artifacts/batch6-{smoke,emote,movie,audio,extras}/` 通过；纯日文版 `--engine-arg=-lllj_zh=no` 的 smoke（`artifacts/batch6-smoke-jp/`）通过。
+  `--only emote` 的已加载检查改为按 `requested→placed` 配对（标题背景经重定向加载 `_cn` 版本）。
+- 日志例外：`scenarios.py` 的 `KNOWN_CAUGHT` 只有汉化包脚本自己 try/catch 的两处——`snapcapture.tjs` 在 `world_object` 之前读水印代理
+  （`MakeImageDataProxy.get`）、构造 `kag` 期间读 `uiLanguageType` getter。krkrz 在抛出处记日志；Wine 下原版启动日志没有这两条，
+  推断原版引擎对同一函数内 try 捕获的异常不记日志（未直接证实）。`KNOWN_DIALOGS` 只允许包的防倒卖提示。
 
 ## 批次 7：性能 60Hz
 

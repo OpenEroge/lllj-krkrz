@@ -1,5 +1,37 @@
+diff --git a/common/base/PooledAllocator.cpp b/common/base/PooledAllocator.cpp
+index 7aaf1a3..06a9479 100644
+--- a/common/base/PooledAllocator.cpp
++++ b/common/base/PooledAllocator.cpp
+@@ -453,6 +453,9 @@ void *TVPPooledAllocator::allocate(size_t size, TVPAllocTag tag) {
+ 		size_t need = (size + ALIGN - 1) & ~(ALIGN - 1);
+ 		if (need < MIN_BLOCK - BLOCK_HEADER_SIZE) need = MIN_BLOCK - BLOCK_HEADER_SIZE;
+ 
++		void *pooled = nullptr;
++		size_t used_after = 0;
++		{
+ 		std::lock_guard<std::mutex> lk(mu_);
+ 		int fl, sl;
+ 		Block *b = pool_corrupted_ ? nullptr : findSuitable(need, fl, sl);
+@@ -478,8 +481,15 @@ void *TVPPooledAllocator::allocate(size_t size, TVPAllocTag tag) {
+ 			RecordVerbose({ VerboseKind::PoolAlloc, tag, name_, payload, actual_payload, size,
+ 			                pool_used_.load(std::memory_order_relaxed) });
+ #endif
+-			firePressureIfNeeded(pool_used_.load(std::memory_order_relaxed));
+-			return payload;
++			pooled = payload;
++			used_after = pool_used_.load(std::memory_order_relaxed);
++		}
++		}
++		if (pooled) {
++			// The pressure callback frees storage caches, i.e. re-enters free()
++			// on this allocator: mu_ must be released first (it is not recursive).
++			firePressureIfNeeded(used_after);
++			return pooled;
+ 		}
+ 		// pool 枯渇 → fallback
+ 	}
 diff --git a/common/base/StorageIntf.cpp b/common/base/StorageIntf.cpp
-index c100157..658cd02 100644
+index c100157..a0a734e 100644
 --- a/common/base/StorageIntf.cpp
 +++ b/common/base/StorageIntf.cpp
 @@ -36,6 +36,9 @@
@@ -165,7 +197,55 @@ index c100157..658cd02 100644
  
  	return totalcount;
  }
-@@ -1823,6 +1908,29 @@ ttstr TVPGetPlacedPath(const ttstr & name)
+@@ -1769,12 +1854,28 @@ static tjs_uint TVPRebuildAutoPathTable()
+ //---------------------------------------------------------------------------
+ // TVPGetPlacedPath
+ //---------------------------------------------------------------------------
+-ttstr TVPGetPlacedPath(const ttstr & name)
++ttstr TVPGetPlacedPath(const ttstr & requested)
+ {
+ 	try
+ 	{
+ 		tTJSCriticalSectionHolder cs_holder(TVPCreateStreamCS);
+ 
++		ttstr name(requested);
++#ifdef KRKRZ_LLLJ
++		// Chinese patch: bare names first go through its redirect table and
++		// its pack, which overrides every other location (lllj_zh.dll did the
++		// same when opening files). Runs before the cache, because a redirect
++		// depends on the current language.
++		{
++			ttstr overlay;
++			switch (LLLJOverlayLookup(requested, overlay)) {
++			case 1: return TVPMakeIndependentString(overlay);
++			case 2: name = overlay; break;
++			default: break;
++			}
++		}
++#endif
++
+ #ifndef TVP_DONT_CLEAR_AUTOPATH_CACHE
+ 	// search path and return the path which the "name" is placed.
+ 	// returned name is normalized. returns empty string if the storage is not
+@@ -1813,6 +1914,17 @@ ttstr TVPGetPlacedPath(const ttstr & name)
+ 
+ 		ttstr storagename = TVPExtractStorageName(normalized);
+ 
++#ifdef KRKRZ_LLLJ
++		// A path that does not exist falls back to its leaf like the auto
++		// path search below; the Chinese patch pack comes first there too.
++		{
++			const ttstr packed = LLLJOverlayLeaf(storagename);
++			if (!packed.IsEmpty()) {
++				TVPAutoPathCache.Add(TVPMakeIndependentString(name), TVPMakeIndependentString(packed));
++				return TVPMakeIndependentString(packed);
++			}
++		}
++#endif
+ 		TVPRebuildAutoPathTable(); // ensure auto path table
+ 		tTVPFileInfo *result = TVPFindAutoPathTable(storagename);
+ 		if(result && (result->Flag & tTVPFileInfo::EMPTY_FILE) == 0 )
+@@ -1823,6 +1935,29 @@ ttstr TVPGetPlacedPath(const ttstr & name)
  			return TVPMakeIndependentString(result->FilePath);
  		}
  
@@ -195,7 +275,7 @@ index c100157..658cd02 100644
  		// not found
  		TVPAutoPathCache.Add(TVPMakeIndependentString(name), ttstr());
  		return ttstr();
-@@ -1919,6 +2027,19 @@ iTJSDispatch2* TVPGetFilePropertyNoAddRef( const ttstr& name )
+@@ -1919,6 +2054,19 @@ iTJSDispatch2* TVPGetFilePropertyNoAddRef( const ttstr& name )
  
  // 内部呼び出し用
  // name は正規化済み
@@ -215,7 +295,7 @@ index c100157..658cd02 100644
  iTJSBinaryStream * _InnerTVPCreateStream(const ttstr &name, tjs_uint32 flags)
  {
  	tjs_uint32 access = flags & TJS_BS_ACCESS_MASK;
-@@ -1969,14 +2090,26 @@ iTJSBinaryStream * _InnerTVPCreateStream(const ttstr &name, tjs_uint32 flags)
+@@ -1969,14 +2117,26 @@ iTJSBinaryStream * _InnerTVPCreateStream(const ttstr &name, tjs_uint32 flags)
  	catch(...)
  	{
  #ifndef TVP_DONT_CLEAR_AUTOPATH_CACHE
@@ -244,7 +324,7 @@ index c100157..658cd02 100644
  #else
  	if(access >= 1) {
  		// キャッシュから情報を消して再検索されるようにする
-@@ -2155,6 +2288,10 @@ void TVPClearStorageCaches()
+@@ -2155,6 +2315,10 @@ void TVPClearStorageCaches()
  	TVPClearXP3SegmentCache();
  	{
  		tTJSCriticalSectionHolder cs_holder(TVPCreateStreamCS);
@@ -691,6 +771,41 @@ index 022d17e..108661a 100644
  }
  //---------------------------------------------------------------------------
  #define RET_VOID
+diff --git a/common/visual/LoadPNG.cpp b/common/visual/LoadPNG.cpp
+index 3e9adde..a09dfb6 100644
+--- a/common/visual/LoadPNG.cpp
++++ b/common/visual/LoadPNG.cpp
+@@ -12,6 +12,9 @@
+ #include "DebugIntf.h"
+ #include "tjsDictionary.h"
+ #include "ScriptMgnIntf.h"
++#ifdef KRKRZ_LLLJ
++#include "lllj_compat.h"
++#endif
+ 
+ bool TVPAcceptSaveAsPNG(void* formatdata, const ttstr & type, class iTJSDispatch2** dic )
+ {
+@@ -184,6 +187,10 @@ void TVPLoadPNG(void* formatdata, void *callbackdata, tTVPGraphicSizeCallback si
+ 	tTVPGraphicScanLineCallback scanlinecallback, tTVPMetaInfoPushCallback metainfopushcallback,
+ 	iTJSBinaryStream *src, tjs_int keyidx,  tTVPGraphicLoadMode mode)
+ {
++#ifdef KRKRZ_LLLJ
++	// WebP data under a .png name (Chinese patch pack)
++	if (LLLJLoadWebP(sizecallback, scanlinecallback, callbackdata, src, mode)) return;
++#endif
+ 	png_structp png_ptr=NULL;
+ 	png_infop info_ptr=NULL;
+ 	png_infop end_info=NULL;
+@@ -604,6 +611,9 @@ void TVPSaveAsPNG(void* formatdata, iTJSBinaryStream* dst, const tTVPBaseBitmap*
+ 
+ void TVPLoadHeaderPNG(void* formatdata, iTJSBinaryStream *src, iTJSDispatch2** dic )
+ {
++#ifdef KRKRZ_LLLJ
++	if (LLLJLoadHeaderWebP(src, dic)) return;
++#endif
+ 	png_structp png_ptr=NULL;
+ 	png_infop info_ptr=NULL;
+ 	png_infop end_info=NULL;
 diff --git a/common/visual/MoviePlayer.h b/common/visual/MoviePlayer.h
 index 481b1c7..851194b 100644
 --- a/common/visual/MoviePlayer.h

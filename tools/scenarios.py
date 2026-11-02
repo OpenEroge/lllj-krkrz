@@ -159,6 +159,18 @@ WIN32_STUBS = {
 }
 
 
+# Exceptions the game scripts throw and catch themselves (krkrz logs them at the throw site,
+# the original engine does not), keyed by (script, function, VM ip). Each needs a reason.
+KNOWN_CAUGHT = {
+    ("multilang.vanilla.tjs", "get", "3"): "Chinese patch: snapcapture.tjs fills SystemConfig defaults at load and so reads the "
+        "SaveSnapshotWatermark image proxy before world_object exists; MakeImageDataProxy.get catches that and keeps the name",
+    ("anonymous", "uiLanguageType", "5"): "Chinese patch: its SystemConfig.uiLanguageType getter is read while kag is being "
+        "constructed; the getter wraps global.kag in try/catch and returns 0",
+}
+# Information dialogs that are part of the game: the Chinese patch's anti-resale notice at every start.
+KNOWN_DIALOGS = ("本补丁为免费分享、无任何要求即可获取，谨防上当受骗；",)
+
+
 def stubs_seen(path):
     import re
     return sorted(set(re.findall(r"\(lllj\) stub: (\S+)", Path(path).read_text(errors="replace"))))
@@ -168,8 +180,10 @@ def check_log(path):
     # Exact call sites only. All unmatched exceptions remain failures.
     import re
     text = Path(path).read_text(errors="replace")
-    matches = list(re.finditer(r"exception occured at ([^(]+)\(\d+\)\[\(function\) ([^\]]+)\], VM ip = (\d+)", text))
-    known, unknown = [], [match.groups() for match in matches]
+    matches = [(re.sub(r"@0x[0-9a-f]+$", "", m[1]), m[2], m[3]) for m in re.finditer(
+        r"exception occured at ([^(]+)\(\d+\)\[\((?:function|property getter|property setter)\) ([^\]]+)\], VM ip = (\d+)", text)]
+    known = sorted({m for m in matches if m in KNOWN_CAUGHT})
+    unknown = [m for m in matches if m not in KNOWN_CAUGHT]
     # Also reject fatal errors and exception headers the parser did not recognize.
     headers = text.count("exception occured")
     if "source unsupported" in text:  # E-mote content the runtime cannot draw
@@ -179,7 +193,8 @@ def check_log(path):
     unexpected = [name for name in stubs_seen(path) if name not in WIN32_STUBS]
     if unexpected:
         raise AssertionError(f"Unevaluated prelude stubs were called: {unexpected}; see game.log")
-    if headers != len(matches) or unknown or "[dialog] Information:" in text or "prelude error:" in text:
+    dialogs = [line for line in re.findall(r"\[dialog\] Information: (.*)", text) if not line.startswith(KNOWN_DIALOGS)]
+    if headers != len(matches) or unknown or dialogs or "prelude error:" in text:
         raise AssertionError(f"Unhandled/unexpected game errors: {unknown}; headers={headers}, parsed={len(matches)}")
     return known
 
@@ -404,7 +419,12 @@ def emote(session):
                           "note": "Band characters must be on the stairs once state=1 (compare image/アイキャッチキャラ.png)."})
     assert distinct >= 4, "eyecatch looks static"
     text = (session.out / "game.log").read_text(errors="replace")
-    missing = sorted({v for v in EMOTE_EVS.values()} - set(re.findall(r"load parsed=1: \S*[/>]([^/>\s]+\.mtn)", text)))
+    # a requested name counts once the file it was placed at parsed; with the Chinese patch
+    # title_bg*.mtn are placed at their xpck://./title_bg*_cn.mtn redirects
+    parsed = set(re.findall(r"load parsed=1: (\S+\.mtn)", text))
+    loaded = {name for name, placed in re.findall(r"load requested=(\S+\.mtn) trimmed=\S+ placed=(\S+)", text)
+              if placed in parsed}
+    missing = sorted({v for v in EMOTE_EVS.values()} - loaded)
     assert not missing, f"Motions never loaded: {missing}"
     session.write_report()
     return check_log(session.out / "game.log")
@@ -640,6 +660,113 @@ def stripe_wipe(session):
     return round((time.monotonic() - started) * 1000)
 
 
+# Chinese patch (batch 6). Click targets are the patch's own controls at 1920x1080: the title's
+# language button and the rows of its language panel (langselect_right.pbd).
+ZH_TITLE_LANG_BUTTON = (1836, 82)
+ZH_PANEL_ROWS = {0: (1738, 165), 1: (1738, 237), 2: (1738, 310)}
+ZH_LANG = "[kag.languageType, SystemConfig.uiLanguageType]"
+ZH_WEBP = "街_店の前a_冬_cn.png"  # a WebP stored as .png in lllj_zh.pck
+
+
+def zh_pick_language(session, index):
+    session.key("alt+l")
+    session.wait("typeof LanguageSelectPanel.Instance == 'Object' && isvalid LanguageSelectPanel.Instance", 10)
+    time.sleep(1.2)  # the rows take clicks once the panel's open animation has finished
+    session.click(*ZH_PANEL_ROWS[index])
+    session.wait(f"kag.languageType == {index} && typeof LanguageSelectPanel.Instance != 'Object'", 10)
+
+
+def zh_text(session):
+    """Current line in every language, and the line the backlog recorded for it."""
+    return session.obj("%[lang: world_object.player.curText.language, "
+                       "shown: kag.historyLayer.data[kag.historyLayer.data.count-1].plaintext]")
+
+
+def zh(session):
+    """Chinese patch: pack mount, redirects, language switching, WebP, OP subtitles."""
+    session.boot()
+    assert session.ev("LLLJNative.zhEnabled()") == "1", "lllj_zh.pck is not mounted"
+    session.finish_startup()
+    assert session.obj(ZH_LANG) == [1, 1], "the patch starts in Simplified Chinese"
+    placed = lambda name: json.loads(session.ev(f"Storages.getPlacedPath({json.dumps(name)})"))
+    assert placed("title_bg.mtn") == "xpck://./title_bg_cn.mtn"
+    session.step("zh_01_title_cn")
+
+    # the title's own toggle (jp <-> cn, text and UI); the redirect follows on the next open
+    session.click(*ZH_TITLE_LANG_BUTTON)
+    session.wait(f"{ZH_LANG}[0] == 0 && {ZH_LANG}[1] == 0 && SystemHook.currentState == 'title' && kag.inStable", 20)
+    assert placed("title_bg.mtn").endswith("/motion/title_bg.mtn")
+    assert placed("op.ass") == "", "Japanese has no OP subtitles"
+    session.step("zh_02_title_jp")
+    session.click(*ZH_TITLE_LANG_BUTTON)
+    session.wait(f"{ZH_LANG}[0] == 1 && {ZH_LANG}[1] == 1 && SystemHook.currentState == 'title' && kag.inStable", 20)
+
+    # Alt+L panel on the title: Traditional text keeps the cn UI (the patch has no tw UI images)
+    zh_pick_language(session, 2)
+    session.wait("SystemHook.currentState == 'title' && kag.inStable", 20)
+    assert session.obj(ZH_LANG) == [2, 1]
+    assert placed("op.ass") == "xpck://./op_cht.ass"
+    session.step("zh_03_title_tw")
+
+    # WebP data under a .png name: header and pixels (reference values from dwebp)
+    webp = json.dumps(ZH_WEBP, ensure_ascii=False)  # TJS strings have no \u escapes
+    size = session.obj(f"Layer.fetchImageSize({webp})")
+    pixel = int(session.ev(f"(function(){{var l=new Layer(kag,kag.fore.base);l.loadImages({webp});"
+                           f"var p=l.getMainPixel(960,540);invalidate l;return p;}})()"))
+    assert size == [2120, 1280] and pixel & 0xFFFFFF == 0x4C4E51, (size, hex(pixel))
+
+    session.jump("title.ks", "*game", "game")
+    session.wait('typeof world_object.player == "Object" && world_object.player.curPoint > 0', 60)
+    advance(session, 3)
+    text = zh_text(session)
+    assert len(text["lang"]) == 3 and text["shown"] == text["lang"][2]["searchtext"], text
+    assert text["lang"][1]["searchtext"] != text["lang"][2]["searchtext"] != text["lang"][0]["searchtext"], text
+    assert any("一" <= c <= "鿿" for c in text["shown"]), text
+    session.step("zh_04_dialogue_tw")
+    zh_pick_language(session, 1)  # in game: text language only, like the Windows menu
+    assert session.obj(ZH_LANG) == [1, 1]
+    advance(session, 1)
+    text = zh_text(session)
+    assert text["shown"] == text["lang"][1]["searchtext"], text
+    session.step("zh_05_dialogue_cn")
+    session.ev("SystemAction.backlog()")
+    session.wait('SystemHook.currentState == "backlog"')
+    session.step("zh_06_backlog")
+    session.jump("backlog.ks", "*back", "game")
+    session.wait('typeof world_object.player == "Object" && world_object.player.curPoint > 0')
+
+    # OP subtitles in the current language; Japanese plays without them
+    session.jump("start.ks", "*gameend_title", "title")
+    session.jump("title.ks", "*cgmode", "cgmode")
+    for index, expect in ((1, "op_chs.ass"), (2, "op_cht.ass"), (0, None)):
+        session.ev(f"SetLanguageType({index})")
+        start_movie(session, "op")
+        session.ev("kag.movies[0].position = 21000")  # first lyric: 19.71-24.54s
+        session.wait("kag.movies[0].position >= 21500", 10)
+        stats = session.obj("LLLJNative.movieStats()")
+        if expect:
+            sub = stats.get("subtitle")
+            assert sub and sub["file"] == expect and sub["max_images"] > 0, stats
+            session.step(f"zh_07_{expect[:-4]}")
+        else:
+            assert "subtitle" not in stats, stats
+        session.click(960, 540, 3)  # right click skips
+        back_in_gallery(session, 15)
+    session.ev("SetLanguageType(1)")
+    # the patch's music videos exist only in the pack
+    MOVIES.setdefault("mv1", "mv1.mp4")
+    start_movie(session, "mv1")
+    session.ev("kag.movies[0].position = 13000")  # 12.34-16.53s
+    session.wait("kag.movies[0].position >= 13500", 10)
+    stats = session.obj("LLLJNative.movieStats()")
+    assert stats["name"].startswith("xpck://") and stats.get("subtitle", {}).get("file") == "mv1_chs.ass", stats
+    assert stats["subtitle"]["max_images"] > 0, stats
+    session.step("zh_08_mv1_chs")
+    session.click(960, 540, 3)
+    back_in_gallery(session, 15)
+    return check_log(session.out / "game.log")
+
+
 def extras(session):
     """Batch 5: layerExDraw (flowchart, colour wheel), the stripe wipe, the PackinOne exports,
     msdfrender atlas text (Text page sliders, flowchart headers), the gamepad page, and every
@@ -730,11 +857,13 @@ def main():
     parser.add_argument("out", type=Path)
     parser.add_argument("lines", nargs="?", type=int, default=6)
     parser.add_argument("--sample-seconds", type=float, default=1)
-    parser.add_argument("--only", choices=("all", "gallery", "settings", "controls", "emote", "movie", "audio", "extras"), default="all")
+    parser.add_argument("--only", choices=("all", "gallery", "settings", "controls", "emote", "movie", "audio", "extras", "zh"), default="all")
     parser.add_argument("--vomstyle", choices=("overlay", "mixer", "layer", "mfevr"),
                         help="movie: force a VideoOverlay mode and only play the OP")
+    parser.add_argument("--engine-arg", action="append", default=[],
+                        help="extra engine option, e.g. -lllj_zh=no for the Japanese game")
     args = parser.parse_args()
-    extra = [f"-vomstyle={args.vomstyle}"] if args.vomstyle else []
+    extra = ([f"-vomstyle={args.vomstyle}"] if args.vomstyle else []) + args.engine_arg
     session = Session(args.out, extra, gallery_seed=True)
     try:
         if args.only == "all":
@@ -745,13 +874,15 @@ def main():
             known = movie(session, args.vomstyle)
         elif args.only == "audio":
             known = audio(session)
+        elif args.only == "zh":
+            known = zh(session)
         else:
             session.boot()
             session.finish_startup()
             globals()[args.only](session)
             known = check_log(session.out / "game.log")
         seen = stubs_seen(session.out / "game.log")
-        session.write_report(passed=True, known_exceptions=known, win32_stubs={n: WIN32_STUBS[n] for n in seen})
+        session.write_report(passed=True, known_exceptions={"|".join(k): KNOWN_CAUGHT[k] for k in known}, win32_stubs={n: WIN32_STUBS[n] for n in seen})
         print(f"PASS: {session.out}/report.json")
     except Exception as error:
         session.write_report(passed=False, error=str(error))

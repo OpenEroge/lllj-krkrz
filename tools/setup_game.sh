@@ -2,7 +2,8 @@
 # Recreate the run directory game/ from the unpacked data (result/).
 #   tools/setup_game.sh [RESULT_DIR]
 # game/ holds symlinks to result/data/* and result/<archive>/, plus a plain
-# patch.xp3 repacked from result/patch (the game mounts patch.xp3 itself).
+# patch.xp3 repacked from result/patch (the game mounts patch.xp3 itself) and a link
+# to the Chinese patch pack lllj_zh.pck.
 set -e
 LLLJ="$(cd "$(dirname "$0")/.." && pwd)"
 R="${1:-$LLLJ/../limelight/result}"
@@ -27,5 +28,9 @@ if [[ -d "$R/unencrypted" ]]; then
 else
 	echo "Missing unencrypted/ (53 replacement CG files expected)" >&2
 	exit 1
+fi
+# Chinese patch pack, read in place (plugins/lllj_compat/src/xpck.cpp)
+if [[ -f "$R/../lllj_zh.pck" ]]; then
+	ln -sfnT --relative "$R/../lllj_zh.pck" "$G/lllj_zh.pck"
 fi
 echo "game/ ready"
