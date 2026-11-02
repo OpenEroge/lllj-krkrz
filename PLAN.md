@@ -206,20 +206,43 @@ E-mote 自动改用 CPU 光栅化，不是 60Hz 的目标环境，只作回归�
 
 ## 批次 5：其余插件和特效
 
-- [ ] **PackinOne 剩余部分**（按脚本实际调用补）：`gaussianBlur`、`colorize`、`copyRaster`、`generateWhiteNoise`、`SliceLayer`/`loadSlicedImage`、
-      `Array.save2`、`Scripts.safeEvalStorage/getObjectContext/equalStruct`、`Storages.dirlistEx` 等。用
-      `grep -rhoE "calld .*'(名字)'" decomp/` 列出实际调用，再对照 krkrz_dev 已有插件（scriptsEx、saveStruct、layerEx*）。
-- [ ] **layerExDraw**（GDI+：`drawPathString`、`drawBezier`、`measureString`、`GdiPlus.addPen/addBrush`…；用于 `exroll.tjs`（片尾滚动）、
-      `scnchart_ui.tjs`（流程图）、`affinesource*`）：移植 `ref/krkr-ns/.../plugins/layerexdraw`（有抽象 `DrawBackend.h`）。
-- [ ] **msdfrender**（`prerenderfontex.tjs` 的 `sysfont/headfont/numfont…_atlas`）：确认现在的回退渲染与原版观感差异，必要时实现。
-- [ ] **extNagano**（blurfade、flutter、honeyturn、multiripple、scanline、zoomfade、spin）和 **extrans**（mosaic 在 184 个 scn 里用到）逐个跑一遍。
-- [ ] GlitchEffect、layerStwCopy（`stitchWrappedCopy`）、k2compat 需要的原生部分、`System.fetchImageSize` 等零散 API。
-- [ ] **fftgraph**：鉴赏音乐页频谱 `drawFFTGraph(layer, buf, 1, 0, w-1, h, %[type:1, division:22, thick:3, oncolor, peakcolor, offcolor, bgcolor])`
-      （`exgallery.tjs` 的 `ExSoundGallerySpeanaModule`），可用引擎的 `getSoundSpectrum` 在 prelude 实现；画法需与 Wine 截图对照。
-- [ ] 手柄：`GamepadPort` 现在是空壳，接 krkrz 自带的 SDL 手柄输入（`doc/Gamepad.md`）。
-- [ ] 流程图（フローチャート）、backlog、语音回放、截图功能（snapcapture）、鉴赏模式各页。
+先按脚本实际调用和原版 `plugin/` 目录核对范围（`decomp/` 调用点 + 原 DLL 导出），只实现游戏真正走到的部分。
+
+- [x] **PackinOne 剩余部分**：`gaussianBlur/colorize/generateWhiteNoise`（layerExImage）、`copyRaster`（layerExRaster）、`Array.save2`（saveStruct）、
+      `Scripts.safeEvalStorage/getObjectContext/equalStruct`（scriptsEx）早已静态链接。真正缺的三个（脚本无保护调用）在 `src/layer_extras.cpp`：
+      `Storages.saveOctet`（お気に入りボイス、snapcapture、cgmode）、`Layer.fetchImageSize`（backlog 内嵌图、phonechat；经图像加载器解析名字）、
+      `System.getKnownFolderPath("Captures")`（XDG 图片目录）。`dirlistEx`、SliceLayer、`Array.toOctet` 无调用或有 typeof 保护，不做。
+- [x] **layerExDraw**：vendor krkr-ns 的 PlutoVG 版本（`plugins/lllj_compat/layerexdraw/`、`third_party/plutovg/`），静态插件 `lllj_layerexdraw`。
+      原来的空 shim 让游戏以为 GdiPlus 存在，反而跳过了自带回退。PathGradient 按 GDI+ 三角扇语义重写（krkr-ns 只取第一个外圈色，颜色轮盘成了纯色）。
+      ncbind 绑定头移到共用的 `shim/lllj_ncbind.h`，按 `TVP_PLUGIN_NAME` 给所有 ncbind 名字加前缀。exroll（片尾滚动）在 `custom.tjs` 里已注释掉，不需要文字绘制。
+- [x] **msdfrender**：`src/msdfrender.cpp` 按原 DLL 反汇编实现 `makeGlyphMSDF/SDF`（MSDF 取 RGB 中值、SDF 取 alpha，`cov = 128 + (sd-128)*param`）、
+      `operateGlyphToProvince`（饱和相加）、`makeBitmapFromProvince`、`getAscentHeight`，绘制用引擎的 `Layer.drawGlyph`。设置页滑块数值、流程图章节标题原来显示成「←」，现在正常。
+- [x] **extNagano / extrans**：138 个 `.scn` 只用 `crossfade/universal/mosaic`（93 个），另有 eyecatch 的 `turn`；extNagano 的转场剧本零引用（`extNaganoEnabled` 已注释）。
+      两者早已静态链接，`--only extras` 对 mosaic/turn 和 blurfade/flutter/multiripple/scanline/zoomfade/spin 各跑一次，均正常完成、无异常。
+- [x] **layerStwCopy**：`Layer.stitchWrappedCopy` 按原 DLL 反汇编实现（行循环 0x10002cb0、回绕行拷贝 0x10002c50）+ `run.sh` 占位文件，
+      游戏自己的 `SysTransitionEffect` 生效，删除了 prelude 里的替代转场。GlitchEffect 无任何调用、k2compat 原生部分均有 typeof 保护，不做。
+- [x] **fftgraph**：原版游戏目录里就没有 `fftgraph.dll`，原版同样提示「fftgraph.dllがありません」，保持一致，不做。
+- [x] **手柄**：不模拟 gamepad.dll。prelude 在没有显式 `-joypad` 时设 `-joypad=dinput`，游戏走原版自带的「引擎手柄」分支，
+      krkrz 的 SDL 手柄发 VK_PAD* 键，经 KAG `padKeyMap` 生效；再模拟 `GamepadPort` 会让同一按键触发两次。
+- [x] 流程图、backlog、设置各页、鉴赏入口由 smoke + `--only extras` 覆盖。流程图退出时原版脚本往无图像的 `kag.uibase` 上 `piledCopy`
+      （非 D3D 路径，Wine 下原版日志同样有这个被捕获的异常），prelude 给 `PlayBackViewUtil.pile` 加了判断。
 
 验收：自动化场景脚本覆盖的每个画面与 Wine 截图一致；日志无异常、无 `(lllj) stub:` 以外的警告（stub 也要逐个评估是否可接受）。
+
+### 批次 5 验收记录（2026-11-02）
+
+- 新场景：`python3 -I tools/scenarios.py artifacts/batch5-extras --only extras`（连续两次通过，`artifacts/batch5-extras{,-2}/`）。
+  `fetchImageSize('attention') == [1920,1080]`、`saveOctet` 往返一致、`getKnownFolderPath` 非空；流程图连线像素 `A8B9CA`（背景 `021340`）；
+  颜色轮盘四个色相点 `BAF385/F38585/83F3F3/BC8AEF`；手柄设置页；backlog 条纹转场 276ms；10 种转场均有中途画面变化、0 异常。
+- `check_log` 收紧：`(lllj) stub:` 只允许评估过的 Windows 专有 `System.setDpiAwareness/readRegValue/setIconicPreview`（`scenarios.py` 的 `WIN32_STUBS` 写明理由），
+  `msdfrender not linked` 也算失败。
+- 回归：`artifacts/batch5-smoke/`、`artifacts/batch5-emote/`、`artifacts/batch5-movie/`、`artifacts/batch5-audio/` 全部通过，日志 0 个 `exception occured`。
+- 与原版对照：`python3 -I tools/emote_compare.py artifacts/batch5-compare`（系统画面用 `kag.sysbase` 的 `piledCopy` 截取，与游戏截图功能相同；
+  `captureSnapshot` 只有场景层）。条纹转场 50/120/200ms 的条纹方向、宽度、相位一致；流程图（连线、小地图、图集字体标题）一致；
+  设置页滑块数值一致。流程图节点「プロローグ」后的缺字：原版画「□」，移植画「←」（两边都缺这个字形，只是占位符不同）。
+  原版在 Wine 下 `isD3D 0`、`uibase.hasImage 0`，与本移植同一路径。
+- 未完成：实体手柄需在桌面 `./run.sh` 人工确认。对照中发现正文排版与原版不同（原版两行之间多一行空行，点击等待图标位置不同），
+  与本批次无关（TextRender 未改动），记入批次 6 的文字细节。
 
 ---
 
@@ -239,7 +262,8 @@ E-mote 自动改用 CPU 光栅化，不是 60Hz 的目标环境，只作回归�
       先在 Wine 下跑 `lllj_zh.exe` 观察它重定向了哪些文件（`-forcelog=yes` 的日志里能看到读取的文件名）。
 - [ ] **视频字幕**：在批次 3 的 FFmpeg 后端（`FFmpegMoviePlayer.cpp` 的 `Deliver`，I420 平面）里接 libass，按语言叠加 `.ass`（原 DLL 就是这么做的）；
       注意 `SelectMovieFile` 已有 `SelectLangMovieFile` 钩子。或退而求其次用离线烧录版本。
-- [ ] 汉化组鸣谢画面、中文字体回退（无字形时）、竖排/注音等文字细节（TextRender 的 ruby、换行禁则：上次发现单独的「。」会被折到新行）。
+- [ ] 汉化组鸣谢画面、中文字体回退（无字形时）、竖排/注音等文字细节（TextRender 的 ruby、换行禁则：上次发现单独的「。」会被折到新行；
+      批次 5 对照发现正文行距与原版不同：原版两行之间多一行空行，见 `artifacts/batch5-compare/png/*_namebox_1500.png`）。
 - [ ] 存档：导入 `<游戏目录>/savedata_zh/`，读档验证。
 
 验收：中文标题→新游戏→正文/选项/backlog 全中文；设置里切换日/简/繁即时生效；OP/ED 有对应语言字幕；汉化版存档可读。
