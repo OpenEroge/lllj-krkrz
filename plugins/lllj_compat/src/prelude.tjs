@@ -103,7 +103,9 @@ function lllj_link(name) {
 }
 function lllj_unlink(name) {
 	var key = Storages.extractStorageName(name).toLowerCase();
-	if (LLLJ.loaded[key] !== void) return; // never unload shims
+	// never unload shims or static plugins; unlinking one that was never linked
+	// (SetupFullHDMovie drops krmovie.dll on the Media Foundation path) is a no-op
+	if (LLLJ.loaded[key] !== void || LLLJ.shims[key] !== void || LLLJ.realName[key] !== void) return;
 	LLLJ.origUnlink(name);
 }
 Plugins.link = lllj_link;
@@ -116,6 +118,15 @@ function lllj_shim(names, func) {
 
 // Win32-only core APIs missing from the generic (SDL) build
 lllj_stubs(System, "System", %[ readRegValue: void, writeRegValue: void ]);
+
+// override.tjs derives currentWindowsVersion from System.getOSVersion (or a
+// "Windows ..." osName). Report Windows 10 as the original sees on its target
+// OS: checkWindowsVersion.canMFEVR then holds, SelectMovieFile prefers the
+// H.264 .mp4 movies (FFmpeg backend) and getVomStyle picks "mfevr", which the
+// SDL VideoOverlay treats as the overlay presenter. Windows 11 only adds
+// win11depend.tjs, so 10 is kept.
+function lllj_getOSVersion() { return %[ major: 10, minor: 0, build: 19045 ]; }
+if (typeof System.getOSVersion == "undefined") System.getOSVersion = lllj_getOSVersion;
 
 // ---------------------------------------------------------------------------
 // shims

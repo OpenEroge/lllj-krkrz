@@ -255,6 +255,60 @@ index c100157..658cd02 100644
  		TVPClearAutoPathCache();
  	}
  }
+diff --git a/common/visual/MoviePlayer.h b/common/visual/MoviePlayer.h
+index 481b1c7..851194b 100644
+--- a/common/visual/MoviePlayer.h
++++ b/common/visual/MoviePlayer.h
+@@ -102,4 +102,12 @@ public:
+ extern iTVPMoviePlayer*TVPCreateMoviePlayer(const tjs_char *filename, bool preferYUV=false);
+ extern iTVPMoviePlayer*TVPCreateMoviePlayer(IMovieReadStream *stream, const char *filename, bool preferYUV=false);
+ 
++// アプリ側 (静的リンクされた追加コード) が登録できる追加デコーダ。TVPCreateMoviePlayer の
++// 両版の先頭で呼ばれ、扱えない形式なら nullptr を返す (以降は内蔵の振り分けへ進む)。
++// stream 版から呼ばれたときは stream != nullptr で、成功時のみ callee が stream を所有する
++// (失敗時は呼び出し側が release)。ファイルパス版では stream == nullptr。
++typedef iTVPMoviePlayer *(*tTVPExternalMoviePlayerFactory)(
++	IMovieReadStream *stream, const char *utf8name, bool preferYUV);
++extern tTVPExternalMoviePlayerFactory TVPExternalMoviePlayerFactory;
++
+ #endif
+diff --git a/generic/app/movie.cpp b/generic/app/movie.cpp
+index 99a38f6..bc237ba 100644
+--- a/generic/app/movie.cpp
++++ b/generic/app/movie.cpp
+@@ -200,6 +200,9 @@ class tTVPMoviePlayer : public iTVPMoviePlayer {
+   std::atomic<bool> mDelivered;
+ };
+ 
++// 追加デコーダ (MoviePlayer.h 参照)。未登録なら nullptr
++tTVPExternalMoviePlayerFactory TVPExternalMoviePlayerFactory = nullptr;
++
+ // CreatePlayer (ファイルパス版)
+ iTVPMoviePlayer*
+ TVPCreateMoviePlayer(const tjs_char *filename, bool preferYUV)
+@@ -207,6 +210,11 @@ TVPCreateMoviePlayer(const tjs_char *filename, bool preferYUV)
+   std::string nfilename;
+   TVPUtf16ToUtf8(nfilename, filename);
+ 
++  if (TVPExternalMoviePlayerFactory) {
++    if (iTVPMoviePlayer *p = TVPExternalMoviePlayerFactory(nullptr, nfilename.c_str(), preferYUV))
++      return p;
++  }
++
+   // MPEG-1 (.mpg/.mpeg) は movie-player (webm 専用) では扱えないので pl_mpeg 内蔵
+   // プレイヤへ振り分ける。pl_mpeg は全データを要するのでファイルを丸読みする。
+   if (TVPIsMpeg1Path(nfilename.c_str())) {
+@@ -237,6 +245,10 @@ TVPCreateMoviePlayer(const tjs_char *filename, bool preferYUV)
+ iTVPMoviePlayer*
+ TVPCreateMoviePlayer(IMovieReadStream *stream, const char *filename, bool preferYUV)
+ {
++  if (TVPExternalMoviePlayerFactory) {
++    if (iTVPMoviePlayer *p = TVPExternalMoviePlayerFactory(stream, filename, preferYUV))
++      return p;   // 成功: stream は callee が所有
++  }
+   // MPEG-1 (.mpg/.mpeg) は pl_mpeg 内蔵プレイヤへ。pl_mpeg は全データを要するので
+   // ストリームを丸読みする。所有権契約 (成功時のみ callee が stream を release、
+   // 失敗時は呼び出し側が release) を守るため、読み込みでは release せず、player 生成が
 diff --git a/generic/environ/Application.cpp b/generic/environ/Application.cpp
 index 5d2a42f..b53545e 100644
 --- a/generic/environ/Application.cpp
@@ -275,6 +329,104 @@ index 5d2a42f..b53545e 100644
  	KRKRZ_RENDER_STATS_SCOPE(TVPRenderStatsAddFrameDispatch);
  	try {
  		// 送信に失敗してリトライキューに積まれたイベントを再送する。
+diff --git a/generic/visual/VideoOvlImpl.cpp b/generic/visual/VideoOvlImpl.cpp
+index 2174f18..0d8e73d 100644
+--- a/generic/visual/VideoOvlImpl.cpp
++++ b/generic/visual/VideoOvlImpl.cpp
+@@ -68,6 +68,10 @@ tTJSNI_VideoOverlay::tTJSNI_VideoOverlay()
+ , PrepareFallback(false)
+ , PrepareQuiet(false)
+ , LoopPlay(false)
++, PeriodEventFrame(-1)
++, PeriodFired(false)
++, SegLoopStartFrame(-1)
++, SegLoopEndFrame(-1)
+ , Presenter(nullptr)
+ , PresenterRegistered(false)
+ , mUseYUV(false)
+@@ -123,6 +127,24 @@ tTJSNI_VideoOverlay::CheckUpdate()
+ 		FirePeriodEvent(perLoop);
+ 		return;
+ 	}
++	if (Status == tTVPVideoOverlayStatus::Play && mPlayer && mPlayer->IsPlaying()
++	    && (PeriodEventFrame >= 0 || SegLoopEndFrame > 0)) {
++		const double fps = mPlayer->FrameRate();
++		if (fps > 0.0) {
++			const tjs_int64 frame = (tjs_int64)(mPlayer->Position() * fps / 1000000.0);
++			if (SegLoopEndFrame > 0 && frame >= SegLoopEndFrame) {
++				// 区間ループ終端: 開始コマへ戻す (WINVER の perSegLoop と同じ)
++				tjs_int start = SegLoopStartFrame > 0 ? SegLoopStartFrame : 0;
++				mPlayer->Seek( (int64_t)(start * 1000000.0 / fps) );
++				FirePeriodEvent(perSegLoop);
++				return;
++			}
++			if (PeriodEventFrame >= 0) {
++				if (frame < PeriodEventFrame) PeriodFired = false;
++				else if (!PeriodFired) { PeriodFired = true; FirePeriodEvent(perPeriod); }
++			}
++		}
++	}
+ 	if (Status == tTVPVideoOverlayStatus::Play || Status == tTVPVideoOverlayStatus::Pause) {
+ 		SetStatusAsync( mPlayer->IsPlaying() ? tTVPVideoOverlayStatus::Play : tTVPVideoOverlayStatus::Stop );
+ 	}
+@@ -437,9 +459,15 @@ void tTJSNI_VideoOverlay::Prepare() {
+ 	if (Window) Window->AddVideoOverlay(this);
+ }
+ //---------------------------------------------------------------------------
+-void tTJSNI_VideoOverlay::SetSegmentLoop( int comeFrame, int goFrame ) {}
++void tTJSNI_VideoOverlay::SetSegmentLoop( int comeFrame, int goFrame ) {
++	SegLoopStartFrame = comeFrame;
++	SegLoopEndFrame = goFrame;
++}
+ //---------------------------------------------------------------------------
+-void tTJSNI_VideoOverlay::SetPeriodEvent( int eventFrame ) {}
++void tTJSNI_VideoOverlay::SetPeriodEvent( int eventFrame ) {
++	PeriodEventFrame = eventFrame;
++	PeriodFired = false;
++}
+ //---------------------------------------------------------------------------
+ void tTJSNI_VideoOverlay::SetRectangleToVideoOverlay() {}
+ //---------------------------------------------------------------------------
+diff --git a/generic/visual/VideoOvlImpl.h b/generic/visual/VideoOvlImpl.h
+index 4f2e65b..c7907b7 100644
+--- a/generic/visual/VideoOvlImpl.h
++++ b/generic/visual/VideoOvlImpl.h
+@@ -58,6 +58,13 @@ class tTJSNI_VideoOverlay : public tTJSNI_BaseVideoOverlay
+ 	//! perLoop を発火する (WINVER の vsEnded / EC_COMPLETE → 巻き戻しと同じ形)。
+ 	bool LoopPlay;
+ 
++	//! setPeriodEvent / setSegmentLoop (コマ番号、-1 = 無効)。CheckUpdate で再生位置を
++	//! コマへ換算して判定する。PeriodFired は位置が period より前へ戻ると再武装する。
++	tjs_int PeriodEventFrame;
++	bool PeriodFired;
++	tjs_int SegLoopStartFrame;
++	tjs_int SegLoopEndFrame;
++
+ 	// overlay 動画 (非 layer) を DrawDevice へ pull 型で渡す presenter。現在の DrawDevice が
+ 	// 対応 host を公開していれば登録して使い (SDL 等)、無ければ従来 push (UpdateVideo) へ
+ 	// フォールバックする。実体は環境別 (sdl3/visual/SDLVideoPresenter.cpp 等)。
+@@ -110,7 +117,7 @@ public:
+ 	void Prepare();
+ 
+ 	void SetSegmentLoop( int comeFrame, int goFrame );
+-	void CancelSegmentLoop() {}
++	void CancelSegmentLoop() { SegLoopStartFrame = SegLoopEndFrame = -1; }
+ 	void SetPeriodEvent( int eventFrame );
+ 
+ 	void SetStopFrame( tjs_int f );
+@@ -159,9 +166,9 @@ public:
+ 	tjs_real GetPlayRate();
+ 	void SetPlayRate(tjs_real r);
+ 
+-	tjs_int GetSegmentLoopStartFrame() { return 0; }
+-	tjs_int GetSegmentLoopEndFrame() { return 0; }
+-	tjs_int GetPeriodEventFrame() { return 0; }
++	tjs_int GetSegmentLoopStartFrame() { return SegLoopStartFrame; }
++	tjs_int GetSegmentLoopEndFrame() { return SegLoopEndFrame; }
++	tjs_int GetPeriodEventFrame() { return PeriodEventFrame; }
+ 
+ 	tjs_int GetAudioBalance();
+ 	void SetAudioBalance(tjs_int b);
 diff --git a/sdl3/base/FileImpl.cpp b/sdl3/base/FileImpl.cpp
 index 6fc5501..f9918a0 100644
 --- a/sdl3/base/FileImpl.cpp

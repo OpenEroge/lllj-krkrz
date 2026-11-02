@@ -128,18 +128,43 @@ E-mote 自动改用 CPU 光栅化，不是 60Hz 的目标环境，只作回归�
 
 目标：OP（`op.mp4` / `op.wmv`）、7 个 ED（`ed1_ena … edg_gra.wmv`，均 1080p）、鉴赏「ムービー」、以及剧情里的图层视频（`gfx_movie.tjs`）全部正常。
 
-- [ ] krkrz 的 SDL `VideoOverlay` 已有完整框架（`generic/visual/VideoOvlImpl.cpp` + `generic/app/movie.cpp`），后端只支持 WebM（libvpx）和 MPEG-1。
-      **推荐**：在 `TVPCreateMoviePlayer()` 里按扩展名再加一个 **FFmpeg 后端**（实现 `iTVPMoviePlayer`，输出 I420 走现有 GPU YUV 路径，
-      音频走 `tTVPMovieAudioSinkAdapter`），支持 wmv3/vc1/wmav2/h264/aac。参考 `ref/krkr-ns/.../core/visual/sdl2/SwitchMovieOverlay.cpp`、`MovieAudioQueue.h`。
-      FFmpeg：系统包、vcpkg（加到 `plugins/lllj_compat/vcpkg.json`，umbrella 会自动合并）或静态最小构建三选一。
-      备选方案：离线转码成 WebM（VP9 + Opus），零代码但要 ~1.2GB 额外空间，且字幕得烧进画面（每种语言一份）。
-- [ ] `movie.tjs` 依次尝试 `vomMFEVR → vomMixer → vomOverlay`；`-vomstyle=` 可强制。确认 mixer/overlay/layer 三种模式和
-      `onStatusChanged`/`onPeriod`/播放结束事件都正常，等待播放结束的脚本不会卡死。`CUSTOM_USE_MP4` + MFEVR 判定决定选 mp4 还是 wmv。
-- [ ] 图层视频：`gfx_movie.tjs` 用 PackinOne 的 `Layer.copyBottomBlueToTopAlpha / copyRightBlueToLeftAlpha`（蓝通道当 alpha），需在兼容层实现；
-      还有字幕 CSV、MovieSE。AlphaMovie（`.amv`）本作没有文件，只需类存在（已静态链接）。
-- [ ] 音画同步、跳过（点击/Esc）、循环、seek。
+实际素材：`op.mp4` 为 H.264 + AAC 24fps，`op.wmv` 与 7 个 ED 为 **WMV3 + WMA Pro**（不是 wmav2）24/30fps，全部 1080p。
+资源里没有图层视频（无 webm/mpg/amv），所有视频都经 `[sysmovie]` / `[opmovie]`（`macro.ks`、`replay.ks`）走 overlay。
+
+- [x] **FFmpeg 后端** `plugins/lllj_compat/src/FFmpegMoviePlayer.cpp`：直接实现 `iTVPMoviePlayer`，结构照搬 krkrz 的 `Mpeg1MoviePlayer`
+      （自有解码线程、音频 sink 已播放采样数为主时钟、prepare 帧、seek/loop/pause），I420 走现有 GPU YUV 路径，layer 模式用 libyuv 转 BGRA。
+      引擎补丁只加 `TVPExternalMoviePlayerFactory` 钩子（`movie.cpp` 两个重载开头）。FFmpeg 不编译：`tools/fetch_ffmpeg.sh` 下载 BtbN 8.1 LGPL shared 预构建，
+      `$ORIGIN` RPATH（engine 已用 `--disable-new-dtags`，对 libavcodec 自己的 libswresample 也生效）+ `run.sh` 复制进 `game/`。
+      处理了两个素材特性：WMA Pro 在 seek 后输出无时间戳的帧（按上一帧结束 / 最近音频包时间推算）；WMV3 关键帧间隔 5 秒，
+      seek 后先压住音频直到首帧就绪，否则追帧期间音频先跑、视频丢帧。
+- [x] 模式：SDL 版 `vomMFEVR`→`vomOverlay`，mixer/overlay 同一 presenter。原版的 `SelectMovieFile` 只在 `checkWindowsVersion.canMFEVR`
+      且风格为 mfevr 时选 `.mp4`，Linux 上判定为非 Windows 而选了 wmv；prelude 让 `System.getOSVersion` 报 Windows 10（原版目标环境），
+      现在与 Windows 一致选 `op.mp4`。该分支的 `SetupFullHDMovie` 会 unlink 从未 link 的 `krmovie.dll`，prelude 的 unlink 对替身/静态插件改为 no-op。
+      `onStatusChanged` / 播放结束返回、`setPeriodEvent` / `setSegmentLoop`（引擎原为空函数，已在 `CheckUpdate` 按帧号实现）。
+- [x] 图层视频：`layerExBTOA`（`copyBottomBlueToTopAlpha` 等）早已静态链接并映射；素材中无图层视频，`--vomstyle layer` 强制 layer 模式播 OP 验证 ARGB 路径。
+      字幕 CSV / MovieSE 没有对应素材触发。
+- [x] 音画同步、跳过、seek、播完返回。左键跳过只在 `tflags.sysmovie_skip` 时生效（游戏脚本设计），右键/Esc 走 `rightClickHook` / `keyDownHook`。
 
 验收：8 个视频完整播放、音画同步、结束后正确返回；视频期间 60fps；剧情中的图层视频正常。
+
+### 批次 3 验收记录（2026-11-02）
+
+- 全覆盖：`python3 -I tools/scenarios.py artifacts/batch3-movie --only movie`。8 个视频都打开预期文件（OP 为 `op.mp4`），跳到 30 秒后画面变化、位置前进；
+  OP 与 5 个 ED 跳到结尾前 3 秒后自然播完返回鉴赏（2.4–4.4 秒），ED2 右键、ED3 Esc 跳过（0.6–0.7 秒）。视频最大落后音频时钟 ≤32ms，无音频欠载，
+  丢帧除 ED5 跳到结尾那段 27 帧外均为 0–1。
+- 强制模式：`--vomstyle layer` / `--vomstyle mixer`（`artifacts/batch3-movie-{layer,mixer}/`，此时原版逻辑选 `op.wmv`）通过；layer 截图颜色正确。
+- 回归：`artifacts/batch3-smoke/`（只剩批次 4 的 DSP 异常）、`artifacts/batch3-emote/` 通过。
+- 帧率：`tools/benchmark.py --movie [--desktop] --seconds 15`，1080p，dummy 音频，`artifacts/batch3-measure-{desktop,xvfb}/`。
+
+| 环境 | 视频 | Swap/s | 最长间隔(ms) | 出帧 | 丢帧 | 最大落后(ms) | 解码(ms/帧) |
+|---|---|---:|---:|---:|---:|---:|---:|
+| 桌面 AMD 880M（120Hz） | OP（H.264） | 119.9 | 26.5 | 419 | 0 | 21.3 | <1（帧线程，只计提交） |
+| 桌面 | ED1（WMV3） | 119.7 | 27.5 | 514 | 0 | 21.3 | 5.9 |
+| Xvfb llvmpipe | OP | 153.8 | 8.2 | 403 | 0 | 21.3 | — |
+| Xvfb llvmpipe | ED1 | 154.1 | 7.9 | 502 | 0 | 21.3 | 6.3 |
+
+桌面最长间隔 26–28ms 略超批次 7 的 25ms 标准，留给批次 7。音频实听（真实声卡下的口型/节拍同步）需在桌面 `./run.sh` 手动确认。
+字幕（批次 6）：overlay 模式下视频在最上层，字幕需烧进帧；播放器的 `Deliver` 是接 libass 的位置。
 
 ---
 
@@ -188,7 +213,8 @@ E-mote 自动改用 CPU 光栅化，不是 60Hz 的目标环境，只作回归�
 - [ ] **语言重定向**（原 DLL 的 `Multilang.RedirectTable`）：按当前语言把 `title_bg*.mtn` → `*_cn.mtn`、`*.ass` → `_chs/_cht` 等。
       实现方式：prelude 里包 `Storages` 查找，或在 `lllj_compat` 里注册一个存储介质 / 查找钩子；语言值从 `multilang.tjs` 的切换回调拿。
       先在 Wine 下跑 `lllj_zh.exe` 观察它重定向了哪些文件（`-forcelog=yes` 的日志里能看到读取的文件名）。
-- [ ] **视频字幕**：在批次 3 的 FFmpeg 后端里接 libass，按语言叠加 `.ass`（原 DLL 就是这么做的）；或退而求其次用离线烧录版本。
+- [ ] **视频字幕**：在批次 3 的 FFmpeg 后端（`FFmpegMoviePlayer.cpp` 的 `Deliver`，I420 平面）里接 libass，按语言叠加 `.ass`（原 DLL 就是这么做的）；
+      注意 `SelectMovieFile` 已有 `SelectLangMovieFile` 钩子。或退而求其次用离线烧录版本。
 - [ ] 汉化组鸣谢画面、中文字体回退（无字形时）、竖排/注音等文字细节（TextRender 的 ruby、换行禁则：上次发现单独的「。」会被折到新行）。
 - [ ] 存档：导入 `<游戏目录>/savedata_zh/`，读档验证。
 
@@ -205,7 +231,7 @@ E-mote 自动改用 CPU 光栅化，不是 60Hz 的目标环境，只作回归�
       看 krkrz 的 GL 合成器（`doc/GLCompositor.md`、`-drawdevice=ogl`）能否把最终合成搬到 GPU。
 - [ ] 帧节拍：VSync、`-contfreq`、`waitVSync`，避免双重限速导致的抖动；Wayland/X11 都测。
 - [ ] 图片加载：异步加载/预读（krkrz 有 ImageCache、prefetch），解决进场景时的卡顿；去掉批次 1 发现的 auto path 重建。
-- [ ] E-mote 已走 GPU 光栅化（批次 2）；剩读回/转换（可改 PBO 异步或直接合成到 Layer 纹理）和首次贴图上传卡顿。视频 YUV 在 GPU 转换（批次 3 后再测）。
+- [ ] E-mote 已走 GPU 光栅化（批次 2）；剩读回/转换（可改 PBO 异步或直接合成到 Layer 纹理）和首次贴图上传卡顿。视频 YUV 已在 GPU 转换；批次 3 实测桌面视频期间最长间隔 26–28ms，需压到 25ms 以下。
 - [ ] 发布构建：Release + LTO；考虑 steamdev `deckbuild` 容器（glibc 2.31）构建以便在别的机器上跑。
 
 验收：把各场景的 fps/最长帧表格写进本文件，全部达标。

@@ -397,19 +397,98 @@ def emote(session):
     return check_log(session.out / "game.log")
 
 
+# Gallery movie entries (replay.ks *movie_<label>) and the file each must open.
+MOVIES = {"op": "op.mp4", "ed_ena": "ed1_ena.wmv", "ed_anj": "ed2_anj.wmv", "ed_tuk": "ed3_tsu.wmv",
+          "ed_rir": "ed4_rir.wmv", "ed_mik": "ed5_mik.wmv", "ed_nay": "ed6_nay.wmv", "ed_gra": "edg_gra.wmv"}
+MOVIE_STATE = '(function(){var m=kag.movies[0];return %[status:m.lastStatus,position:m.position,total:m.totalTime,mode:SystemHook.currentState,storage:kag.conductor.curStorage];})()'
+
+
+def start_movie(session, label, expect=None):
+    opened = session.obj("LLLJNative.movieStats()")["opened"]
+    session.ev(f"tf.movie_play={json.dumps(label)}")
+    session.ev('kag.process("custom.ks","*extra_movie_start")')
+    session.wait(f'LLLJNative.movieStats().opened > {opened} && kag.movies[0].lastStatus == "play" && kag.movies[0].position > 0', 30)
+    stats = session.obj("LLLJNative.movieStats()")
+    expect = expect or MOVIES[label]
+    assert stats["name"].lower().endswith("/" + expect), f"{label} opened {stats['name']}"
+
+
+def back_in_gallery(session, timeout):
+    session.wait('SystemHook.currentState == "cgmode" && kag.conductor.curStorage == "cgmode.ks" && kag.inStable', timeout)
+
+
+def movie(session, vomstyle=None):
+    """Video (batch 3): every gallery movie plays, advances, ends or is skipped back to the gallery."""
+    session.boot()
+    session.finish_startup()
+    session.jump("title.ks", "*cgmode", "cgmode")
+    labels = ["op"] if vomstyle else list(MOVIES)
+    for i, label in enumerate(labels):
+        name = f"09_{label}" + (f"_{vomstyle}" if vomstyle else "")
+        # SelectMovieFile only prefers .mp4 for the Media Foundation style
+        expect = "op.wmv" if vomstyle and vomstyle != "mfevr" else None
+        start_movie(session, label, expect)
+        # several EDs open on seconds of black; compare frames from mid-movie (also a seek test)
+        session.ev("kag.movies[0].position = 30000")
+        session.wait("kag.movies[0].position >= 30000 && kag.movies[0].position < 33000", 10)
+        first = session.obj(MOVIE_STATE)
+        distinct = frames_differ(session, name, 3, 0.5)
+        second = session.obj(MOVIE_STATE)
+        assert distinct >= 2, f"{label}: picture looks static"
+        assert second["position"] - first["position"] >= 1000, f"{label}: position did not advance {first} -> {second}"
+        entry = {"name": name, "start": first, "later": second, "distinct_frames": distinct}
+        if label == "op":
+            session.step(f"{name}_playing", 3)  # presentation rate while the movie plays
+            entry["stats"] = session.steps.pop()["stats"]
+        how = "end"
+        if not vomstyle and label == "ed_anj":
+            # right click / Esc are the skip inputs (rightClickHook / keyDownHook in
+            # sysmovie); a left click only skips when tflags.sysmovie_skip allows it
+            how = "right_click"
+            session.click(960, 540, 3)
+        elif not vomstyle and label == "ed_tuk":
+            how = "escape"
+            session.key("Escape")
+        else:
+            # jump near the end and let it finish on its own
+            session.ev("kag.movies[0].position = kag.movies[0].totalTime - 3000")
+            session.wait("kag.movies[0].position >= kag.movies[0].totalTime - 3000", 10)
+        started = time.monotonic()
+        back_in_gallery(session, 30)
+        entry.update(how=how, return_seconds=round(time.monotonic() - started, 2),
+                     movie_stats=session.obj("LLLJNative.movieStats()"))
+        session.steps.append(entry)
+        session.write_report()
+        ms = entry["movie_stats"]
+        print(f"{name}: {how} -> gallery in {entry['return_seconds']}s, frames={ms['frames']:.0f} "
+              f"dropped={ms['dropped']:.0f} max_late={ms['max_late_ms']:.1f}ms underrun={ms['underrun_ms']:.1f}ms", flush=True)
+        if how == "end":
+            assert entry["return_seconds"] < 15, f"{label}: end of movie took too long to return"
+        else:
+            assert entry["return_seconds"] < 5, f"{label}: skip did not return promptly"
+        assert ms["max_late_ms"] <= 60, f"{label}: video fell behind the audio clock ({ms['max_late_ms']}ms)"
+    session.capture("09_back_in_gallery")
+    return check_log(session.out / "game.log")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("out", type=Path)
     parser.add_argument("lines", nargs="?", type=int, default=6)
     parser.add_argument("--sample-seconds", type=float, default=1)
-    parser.add_argument("--only", choices=("all", "gallery", "settings", "controls", "emote"), default="all")
+    parser.add_argument("--only", choices=("all", "gallery", "settings", "controls", "emote", "movie"), default="all")
+    parser.add_argument("--vomstyle", choices=("overlay", "mixer", "layer", "mfevr"),
+                        help="movie: force a VideoOverlay mode and only play the OP")
     args = parser.parse_args()
-    session = Session(args.out, gallery_seed=True)
+    extra = [f"-vomstyle={args.vomstyle}"] if args.vomstyle else []
+    session = Session(args.out, extra, gallery_seed=True)
     try:
         if args.only == "all":
             known = smoke(session, args.lines, args.sample_seconds)
         elif args.only == "emote":
             known = emote(session)
+        elif args.only == "movie":
+            known = movie(session, args.vomstyle)
         else:
             session.boot()
             session.finish_startup()

@@ -9,7 +9,8 @@
 完整 smoke 和 Windows 继续存档恢复/推进均有截图和断言。基线、验收命令与证据入口见 `PLAN.md` 批次 1。
 批次 2 已实现：E-mote（Logo、标题 9 种背景、eyecatch、全部 SD）由 `plugins/lllj_compat/emote/`（krkr-ns emoteplayer + 本地修正 + 粒子）播放，
 硬件 GL 下网格在 GPU 光栅化。验收数据见 `PLAN.md` 批次 2。
-**后续**：视频、DSP、其余插件、汉化和完整 60Hz 优化仍按各自批次处理。
+批次 3 已实现：OP/ED 视频由 `plugins/lllj_compat/src/FFmpegMoviePlayer.cpp`（预构建 FFmpeg，`tools/fetch_ffmpeg.sh`）播放，验收数据见 `PLAN.md` 批次 3。
+**后续**：DSP、其余插件、汉化和完整 60Hz 优化仍按各自批次处理。
 
 ## 2. 关键路径
 
@@ -25,6 +26,7 @@
 | 参考实现 | `ref/krkr-ns`（MIT，最重要：emoteplayer/视频/layerexdraw 都在 `krkrsdl2/src/plugins` 和 `core/visual/sdl2`）、`ref/msgtool_tjs_ns0.rs`（GPL，只当格式说明） |
 | 上次 krkrsdl2 尝试的计划 | `~/.claude/plans/https-github-com-krkrsdl2-krkrsdl2-linu-functional-flamingo.md`（插件矩阵、汉化包分析，可参考） |
 | 存档 | `${XDG_DATA_HOME:-$HOME/.local/share}/limelight_lj/`；测试各自用输出目录内的 `saves/` |
+| 预构建 FFmpeg | `third_party/ffmpeg/`（不进 git；`tools/fetch_ffmpeg.sh` 下载，`tools/build.sh` 自动调用） |
 | 验收产物 | `artifacts/`（不进 git）；每个运行目录有 `report.json`、`game.log`、截图和私有 REPL |
 
 ## 3. 日常工作流
@@ -66,6 +68,11 @@ python3 -I tools/verify_windows_saves.py artifacts/win-01
   与原版对照：`tools/emote_compare.py` 在 Xvfb 里用 Wine 跑原版（`-nod3dm=yes -used2d=no`，首启的"在线检查补丁"询问自动答"否"），
   通过 CialloHook 的 `unencrypted/` 覆盖 `custom.tjs` 注入 `tools/emote_compare.tjs`；镜像目录全是软链，不改游戏目录。
 
+- **视频**（`src/FFmpegMoviePlayer.cpp`）：经引擎补丁的 `TVPExternalMoviePlayerFactory` 接管 mp4/wmv/asf/mov/avi，其余仍走 krkrz 的 WebM/MPEG-1。
+  FFmpeg 是 BtbN 的 LGPL shared 预构建，链接时用 `third_party/ffmpeg/lib`，运行时靠 `$ORIGIN` RPATH 找 `game/` 里 `run.sh` 复制的副本
+  （系统里有同 soname 但缺 wmv3/wmapro 的 openSUSE 版本，别让它被加载）。`LLLJNative.movieStats()` 给出帧/丢帧/落后/欠载。
+  prelude 让 `System.getOSVersion` 报 Windows 10，原版 `SelectMovieFile` 因此选 `op.mp4`。
+
 ## 5. 踩过的坑（都已解决，别再踩）
 
 1. **`kirikiriz_generic`**：krkrz 的 SysInitScript 定义了全局常量 `kirikiriz_generic=1`，游戏会当成主机版（忽略 `Plugins.link`、开 Switch UI、xp3 当文件夹）。
@@ -94,13 +101,17 @@ python3 -I tools/verify_windows_saves.py artifacts/win-01
     `-lllj_paths=yes` 在 Release 中独立启用 TJS 栈追踪，查询调用栈和扫描事件，`-lllj_index=no` 是性能对照开关。原始资源保持只读。
 13. **测量**：`-lllj_fps=yes` 计默认 SDLOGL 完成的 Swap；采样命令和各字段口径见 README。切换绘制设备前先确认其呈现钩子已覆盖。
     本次基线的 Xvfb 用 llvmpipe，真实桌面用 AMD Radeon 880M；两种数据分开记录，原始报告保留渲染器和采样时长。
+14. **视频素材特性**：WMA Pro 在 seek 后输出不带时间戳的帧（不处理会把音频起点当成 0，视频永远等时钟）；WMV3 关键帧间隔 5 秒，
+    seek 后要先压住音频直到首帧就绪。ED 开头常有几秒纯黑，判断"画面在动"要先 seek 到片中。左键不跳过视频是游戏设计（`tflags.sysmovie_skip`），右键/Esc 才跳。
+    xdotool 在 Wayland 桌面找不到窗口，`--desktop` 测量里不要用 `session.key/click`。
 
 ## 6. 当前已知问题（详见 PLAN.md 对应批次）
 
 | 现象 | 归属批次 |
 |---|---|
 | eyecatch 在桌面平均约 70fps，但最长帧约 38ms（1080p 读回+转换、首次贴图上传）；无 GPU 时约 20fps | 批次 7 |
-| 视频不能播（movie-player 只支持 WebM + MPEG-1） | 批次 3 |
+| 视频期间桌面最长呈现间隔 26–28ms（>25ms）；真实声卡下的音画同步尚待人工实听 | 批次 7 |
+| 视频字幕（汉化版 `.ass`）未接；接入点是 `FFmpegMoviePlayer.cpp` 的 `Deliver` | 批次 6 |
 | `voiceeffect.tjs DSP` 异常（电话/对讲机音效缺） | 批次 4 |
 | 颜色选择器依赖 layerExDraw；当前显示色样，禁用缺失的轮盘实现 | 批次 5 |
 | layerStwCopy 附加系统转场未实现；当前使用原有规则转场 | 批次 5 |

@@ -21,6 +21,15 @@ for so in "$BIN"/libSDL3.so.*.*; do
 	mv -f "$SO_TMP" "$GAME/$(basename "$so")"
 	ln -sf "$(basename "$so")" "$GAME/libSDL3.so.0"
 done
+# prebuilt FFmpeg for the movie backend (tools/fetch_ffmpeg.sh); found via the
+# executable's $ORIGIN rpath so the system libraries with the same soname are not used
+for so in avformat.so.62 avcodec.so.62 avutil.so.60 swresample.so.6; do
+	SRC=$(readlink -f "$LLLJ/third_party/ffmpeg/lib/lib$so")
+	SO_TMP=$(mktemp "$GAME/.ffmpeg.XXXXXX")
+	cp "$SRC" "$SO_TMP"
+	chmod 644 "$SO_TMP"
+	mv -f "$SO_TMP" "$GAME/lib$so"
+done
 # placeholder files so the game's CanLoadPlugin() finds the DLLs we emulate
 for pd in plugin plugin64; do
 	mkdir -p "$GAME/$pd"

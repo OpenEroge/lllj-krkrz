@@ -3,6 +3,7 @@
 
 --emote samples E-mote scenes instead (batch 2): looping SD scenes, the
 title intro and the eyecatch.
+--movie samples gallery movie playback (batch 3): the H.264 OP and a WMV3 ED.
 """
 import argparse
 import json
@@ -11,7 +12,7 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from scenarios import Session, advance, check_log
+from scenarios import Session, advance, check_log, start_movie
 
 
 def benchmark(session, seconds):
@@ -65,17 +66,36 @@ def emote_benchmark(session, seconds):
     return check_log(session.out / "game.log")
 
 
+def movie_benchmark(session, seconds):
+    session.boot()
+    session.finish_startup()
+    time.sleep(3)
+    session.ev("kag.setInnerSize(1920,1080)")
+    session.jump("title.ks", "*cgmode", "cgmode")
+    for label in ("op", "ed_ena"):
+        start_movie(session, label)
+        time.sleep(1)
+        session.step(f"movie_{label}", seconds)
+        session.steps[-1]["movie_stats"] = session.obj("LLLJNative.movieStats()")
+        session.ev("kag.movies[0].position = kag.movies[0].totalTime - 1000")  # no xdotool input on Wayland
+        session.wait('SystemHook.currentState == "cgmode" && kag.conductor.curStorage == "cgmode.ks" && kag.inStable', 20)
+    return check_log(session.out / "game.log")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("out", type=Path)
     parser.add_argument("--seconds", type=float, default=30)
     parser.add_argument("--legacy-index", action="store_true")
     parser.add_argument("--emote", action="store_true", help="sample E-mote scenes (batch 2)")
+    parser.add_argument("--movie", action="store_true", help="sample gallery movies (batch 3)")
     parser.add_argument("--desktop", action="store_true", help="use the current desktop display; audio remains dummy")
     args = parser.parse_args()
-    session = Session(args.out, ("-lllj_index=no",) if args.legacy_index else (), headless=not args.desktop)
+    session = Session(args.out, ("-lllj_index=no",) if args.legacy_index else (), gallery_seed=args.movie,
+                      headless=not args.desktop)
     try:
-        known = (emote_benchmark if args.emote else benchmark)(session, args.seconds)
+        run = movie_benchmark if args.movie else emote_benchmark if args.emote else benchmark
+        known = run(session, args.seconds)
         session.write_report(passed=True, index="legacy" if args.legacy_index else "incremental", known_exceptions=known)
         print(f"PASS: {session.out}/report.json")
     except Exception as error:

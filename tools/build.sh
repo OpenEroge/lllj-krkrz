@@ -3,6 +3,7 @@
 set -euo pipefail
 LLLJ="$(cd "$(dirname "$0")/.." && pwd)"
 source "$LLLJ/env.sh"
+"$LLLJ/tools/fetch_ffmpeg.sh"
 BUILD="$LLLJ/krkrz_dev/build/x64-linux"
 CONFIG=(--preset x64-linux -DKRKRZ_LLLJ=ON -DLLLJ_EXTRA_PLUGINS=lllj_compat
     -DKRKRZ_BUILD_TOOLS=OFF -DKRKRZ_USE_ELEMENTS=OFF -DKRKRZ_BUILD_TESTS=OFF

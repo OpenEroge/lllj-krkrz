@@ -36,7 +36,10 @@ tools/build.sh                         # Release + KRKRZ_DRAW_STATS=ON
 
 `tools/build.sh` 会处理搬迁后的 CMake 缓存，并复用已下载的 FetchContent 源码。可设 `BUILD_JOBS=8` 控制并行数；参数会传给 CMake。
 
-首次 configure 会通过 vcpkg 编译依赖（约 10 分钟）。系统包：`Mesa-libGLESv2-devel Mesa-libGLESv3-devel yasm systemd-devel libdecor-devel`。
+首次 configure 会通过 vcpkg 编译依赖（约 10 分钟）。视频后端用的 FFmpeg 不编译：`tools/build.sh` 先调用 `tools/fetch_ffmpeg.sh`，
+下载 [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) 的 8.1 LGPL shared 预构建包到 `third_party/ffmpeg/`（固定 tag + sha256，tarball 保留在目录里；
+BtbN 会清理旧 autobuild，失效时换成新的 n8.1 lgpl-shared 资源并更新脚本里的三个常量）。`run.sh` 把 `libav*`/`libswresample` 复制进 `game/`，
+可执行文件的 `$ORIGIN` RPATH 保证用的是这份而不是系统同 soname 的库。系统包：`Mesa-libGLESv2-devel Mesa-libGLESv3-devel yasm systemd-devel libdecor-devel`。
 
 ## 运行
 
@@ -72,7 +75,11 @@ Alt+Enter 切换全屏；缩放和右键返回已回归。系统操作使用游�
   - `TextRenderBase.cpp`：消息排版（移植自 krkr-ns；字宽改为回调脚本的 `onFontChange/onGetTextWidth`，这样预渲染字体也能量）。
   - `compat_main.cpp`：`LLLJNative`（`log`、`attachMembers`：把 TJS 类成员挂到原生类上）。
   - `frame_stats.cpp` / `storage_stats.cpp`：呈现计数、计时快照、资源索引诊断。
-- **引擎补丁**：大小写回退、auto-path 增量索引、正常查找失败后的 Hxv4 文件名回退、SDLOGL 计时和 `recreate()` 兼容入口。游戏专用改动由 `KRKRZ_LLLJ` 控制。
+  - `FFmpegMoviePlayer.cpp`：VideoOverlay 的 mp4/wmv/asf 后端（libavformat/libavcodec，结构仿 krkrz 的 `Mpeg1MoviePlayer`：
+    自有解码线程、以音频 sink 的已播放采样数为主时钟、seek 后先压住音频直到首帧就绪），经引擎补丁的 `TVPExternalMoviePlayerFactory` 注册。
+    `LLLJNative.movieStats()` 返回最近一个视频的出帧/丢帧/最大落后/解码耗时/欠载。
+- **引擎补丁**：大小写回退、auto-path 增量索引、正常查找失败后的 Hxv4 文件名回退、SDLOGL 计时和 `recreate()` 兼容入口、
+  外部视频播放器工厂钩子、VideoOverlay 的 `setPeriodEvent` / `setSegmentLoop`。游戏专用改动由 `KRKRZ_LLLJ` 控制。
 
 ## 工具
 
@@ -85,7 +92,7 @@ Alt+Enter 切换全屏；缩放和右键返回已回归。系统操作使用游�
 | `tools/xp3plain.py` | 目录打包为明文 XP3 |
 | `tools/iterate.sh` | 编译 + 无头运行 N 秒 + 抓报错 |
 | `tools/smoke.sh` / `tools/savetest.sh` | 完整场景回归，含普通/快速存读档断言 |
-| `tools/benchmark.py` | 1080p 标题、对话各 30 秒及 10 轮转场；`--emote` 测 SD、标题开场、eyecatch |
+| `tools/benchmark.py` | 1080p 标题、对话各 30 秒及 10 轮转场；`--emote` 测 SD、标题开场、eyecatch；`--movie` 测 OP/ED 播放 |
 | `tools/verify_batch1.py` | 索引、哈希、分段存档、导入回归 |
 | `tools/verify_resources.py` | 53 个去码资源的挂载优先级/字节及 16 个无名文件完整性 |
 | `tools/verify_windows_saves.py` | 复制 Windows 存档后实测恢复、缩略图和推进 |
@@ -107,13 +114,18 @@ python3 -I tools/benchmark.py artifacts/after-01
 python3 -I tools/benchmark.py artifacts/desktop-01 --desktop
 python3 -I tools/scenarios.py artifacts/emote-01 --only emote   # 全部 43 个 .mtn
 python3 -I tools/benchmark.py artifacts/emote-desktop-01 --emote --desktop
+python3 -I tools/scenarios.py artifacts/movie-01 --only movie   # 鉴赏里的 OP + 7 个 ED
+python3 -I tools/scenarios.py artifacts/movie-layer-01 --only movie --vomstyle layer   # 强制模式，只播 OP
+python3 -I tools/benchmark.py artifacts/movie-desktop-01 --movie --desktop
 python3 -I tools/emote_compare.py artifacts/compare-01      # Wine 原版 vs 移植，需要 wine/Xvfb/ImageMagick
 ```
 
 Smoke 覆盖正常启动/Logo、标题、新游戏推进、backlog、存读档、CG/SD/音乐/立绘鉴赏入口、10 个设置分页、全屏/缩放、右键返回。
 `--only emote` 覆盖两个 Logo、31 个 SD、9 种标题背景和 eyecatch（每个都要求画面在动），日志出现 `source unsupported` 即失败。
 E-mote 后端可用 `-lllj_emote=cpu|gl` 强制；`LLLJNative.emoteStats()` 返回各阶段耗时。
-SD 和 Logo 的 E-mote 画面仍属批次 2。脚本只接受已确认的 `.mtn` 加载和 DSP 调用点例外；其余异常、REPL 失败和超时返回非零。
+`--only movie` 从鉴赏入口逐个播放 8 个视频：核对打开的文件、跳到 30 秒后画面在变且位置前进，
+再分别以播完（跳到结尾前 3 秒）、右键、Esc 返回鉴赏，并要求视频落后音频时钟不超过 60ms。
+脚本只接受已确认的 DSP 调用点例外；其余异常、REPL 失败和超时返回非零。
 
 `./run.sh -lllj_fps=yes` 每秒输出 `(lllj) fps: {...}`，不需要显示统计叠层。TJS 可用
 `LLLJNative.resetFrameStats("scene")`、`LLLJNative.frameStats()`、`LLLJNative.storageStats()`。
@@ -128,11 +140,9 @@ SD 和 Logo 的 E-mote 画面仍属批次 2。脚本只接受已确认的 `.mtn`
 ## 现状
 
 能用：启动 → ATTENTION → 标题菜单 → はじめから → 序章；背景、事件 CG（pimg 差分）、立绘、头像窗、对话框文字、名字栏、
-rule 转场、BGM（opus）、语音（ogg）、快存/快读（含缩略图）。
+rule 转场、BGM（opus）、语音（ogg）、快存/快读（含缩略图）；E-mote（批次 2）；OP/ED 视频（批次 3）。
 
 未做（按计划后续处理）：
-- **E-mote**（`motionplayer`）：标题背景、Logo、SD 动画是黑的/缺失，`title_bg.mtn` 加载报错（被捕获）。
-- **视频**：krkrz 内置 movie-player 只支持 WebM，游戏是 WMV/MP4。
 - 语音特效（wf* DSP 滤镜，电话/对讲机声）——报错被捕获，声音无特效。
 - layerExDraw（GDI+ 绘图）、msdfrender、汉化补丁、glibc 2.31 发行构建。
 - 颜色选择器和附加系统转场需要批次 5 的 layerExDraw/layerStwCopy；目前保留色样和普通规则转场，记录明确的 stub。

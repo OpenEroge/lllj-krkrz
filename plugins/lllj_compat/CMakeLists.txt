@@ -26,6 +26,25 @@ set_source_files_properties(${LLLJ_EMOTE_SRC} DIRECTORY ${CMAKE_SOURCE_DIR}/src/
 set_property(SOURCE ${LLLJ_EMOTE_SRC} DIRECTORY ${CMAKE_SOURCE_DIR}/src/core
     APPEND PROPERTY COMPILE_DEFINITIONS LLLJ_EMOTE_GL)
 
+# Prebuilt LGPL shared FFmpeg (tools/fetch_ffmpeg.sh) for the movie backend
+# (src/FFmpegMoviePlayer.cpp). The libraries are copied next to the executable
+# by run.sh; $ORIGIN is added as a DT_RPATH (the engine links with
+# --disable-new-dtags), which also covers libavcodec's own libswresample.
+if(NOT LLLJ_FFMPEG_DIR)
+    get_filename_component(LLLJ_FFMPEG_DIR "${LLLJ_DIR}/../../third_party/ffmpeg" ABSOLUTE)
+endif()
+if(NOT EXISTS "${LLLJ_FFMPEG_DIR}/include/libavcodec/avcodec.h")
+    message(FATAL_ERROR "FFmpeg not found in ${LLLJ_FFMPEG_DIR}; run tools/fetch_ffmpeg.sh")
+endif()
+set(LLLJ_FFMPEG_LIBS)
+foreach(lib avformat avcodec avutil)
+    list(APPEND LLLJ_FFMPEG_LIBS "${LLLJ_FFMPEG_DIR}/lib/lib${lib}.so")
+endforeach()
+set(CMAKE_BUILD_RPATH ${CMAKE_BUILD_RPATH} "\$ORIGIN" PARENT_SCOPE)
+
 set(KRKRZ_SRC_ADD ${KRKRZ_SRC_ADD} ${LLLJ_SRC} ${LLLJ_EMOTE_SRC} PARENT_SCOPE)
+set(KRKRZ_LIB_ADD ${KRKRZ_LIB_ADD} ${LLLJ_FFMPEG_LIBS} PARENT_SCOPE)
 set(KRKRZ_INC ${KRKRZ_INC} ${LLLJ_DIR}/src ${CMAKE_CURRENT_BINARY_DIR}
-    ${LLLJ_DIR}/emote/shim ${LLLJ_DIR}/emote ${CMAKE_SOURCE_DIR}/src/plugins PARENT_SCOPE)
+    ${LLLJ_DIR}/emote/shim ${LLLJ_DIR}/emote ${CMAKE_SOURCE_DIR}/src/plugins
+    ${LLLJ_FFMPEG_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src/core/external/movie-player/extlibs/libyuv/include PARENT_SCOPE)
