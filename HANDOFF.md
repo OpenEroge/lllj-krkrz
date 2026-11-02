@@ -63,6 +63,8 @@ python3 -I tools/verify_windows_saves.py artifacts/win-01
   并把 ncbind 类名私有化（否则会和用 tp_stub 编译的静态插件在链接时合并 vtable）。所有 emote 源文件强制包含 `shim/lllj_emote_prefix.h`（替代 krkr-ns 的 PCH）。
   后端：硬件 GL → 私有 SDL GL 上下文光栅化（创建上下文会重置交换间隔，已恢复）；软件 GL/自检失败 → CPU。`-lllj_emote=cpu|gl` 强制。
   `LLLJNative.emoteStats()` 给出 progress/draw/读回/转换的耗时；`tools/benchmark.py --emote` 测帧率。
+  与原版对照：`tools/emote_compare.py` 在 Xvfb 里用 Wine 跑原版（`-nod3dm=yes -used2d=no`，首启的"在线检查补丁"询问自动答"否"），
+  通过 CialloHook 的 `unencrypted/` 覆盖 `custom.tjs` 注入 `tools/emote_compare.tjs`；镜像目录全是软链，不改游戏目录。
 
 ## 5. 踩过的坑（都已解决，别再踩）
 
@@ -98,7 +100,6 @@ python3 -I tools/verify_windows_saves.py artifacts/win-01
 | 现象 | 归属批次 |
 |---|---|
 | eyecatch 在桌面平均约 70fps，但最长帧约 38ms（1080p 读回+转换、首次贴图上传）；无 GPU 时约 20fps | 批次 7 |
-| E-mote 尚未与 Wine 原版逐帧对照（Wayland 下截不到原版画面）；粒子语义参照逆向实现 | 批次 8 |
 | 视频不能播（movie-player 只支持 WebM + MPEG-1） | 批次 3 |
 | `voiceeffect.tjs DSP` 异常（电话/对讲机音效缺） | 批次 4 |
 | 颜色选择器依赖 layerExDraw；当前显示色样，禁用缺失的轮盘实现 | 批次 5 |

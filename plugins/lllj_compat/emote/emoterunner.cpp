@@ -3,6 +3,7 @@
 #include "emoterunner.h"
 
 #include <sstream>
+#include <random>
 
 #include <SDL.h>
 
@@ -912,26 +913,20 @@ void emotenoderef::progress(float tick, std::vector<emoteRender>& renderList, em
 //    non-looping motion ends, or the oldest one beyond particleMaxNum
 float emotenoderef::particleRandom()
 {
+    if (particleRng == 0)
+    {
+        std::random_device device;
+        particleRng = device() | 1u;
+    }
     particleRng ^= particleRng << 13;
     particleRng ^= particleRng >> 17;
     particleRng ^= particleRng << 5;
     return (particleRng >> 8) * (1.0f / 16777216.0f);
 }
 
-void emotenoderef::updateParticles(float tick, const std::vector<emoteRender>& parentRender, emotelimit lim)
+void emotenoderef::stepParticles(float tick, float dt)
 {
     constexpr float PI = 3.14159265358979323846f;
-    float dt = tick - particleLastTick;
-    if (dt < 0)
-    {
-        // the parent clock restarted (loop or replay): start over
-        particles.clear();
-        particleFrequencyActive = false;
-        particleLastFrame = nullptr;
-        dt = 0;
-    }
-    particleLastTick = tick;
-
     // emission
     const bool active = frame != nullptr && frame->hasContent && frame->hasPrt &&
                         frame->src.rfind("particle/", 0) == 0;
@@ -1019,7 +1014,7 @@ void emotenoderef::updateParticles(float tick, const std::vector<emoteRender>& p
         }
     }
 
-    // step: move, retire finished one-shot motions, then progress each one
+    // move; retire finished one-shot motions
     const float damping = (float)currentNode->particleAccelRatio;
     for (size_t i = 0; i < particles.size();)
     {
@@ -1042,6 +1037,36 @@ void emotenoderef::updateParticles(float tick, const std::vector<emoteRender>& p
                 p.vy *= k;
             }
         }
+        ++i;
+    }
+}
+
+void emotenoderef::updateParticles(float tick, const std::vector<emoteRender>& parentRender, emotelimit lim)
+{
+    if (tick < particleLastTick)
+    {
+        // the parent clock restarted (loop or replay): start over
+        particles.clear();
+        particleFrequencyActive = false;
+        particleLastFrame = nullptr;
+        particleLastTick = tick;
+    }
+    // A clock that jumps (scene shown mid-way, skipToSync) still has to emit
+    // and move particles for the skipped frames, as the original steps its
+    // emitters every frame: catch up one frame at a time, at most 10 seconds.
+    float t = std::max(particleLastTick, tick - 600.0f);
+    while (tick - t > 1.0f)
+    {
+        t += 1.0f;
+        stepParticles(t, 1.0f);
+    }
+    stepParticles(tick, tick - t);
+    particleLastTick = tick;
+
+    for (size_t i = 0; i < particles.size(); ++i)
+    {
+        Particle& p = particles[i];
+        const float age = tick - p.birth;
         std::vector<emoteRender> chain = parentRender;
         emoteRender emt;
         emt.type = 3;
@@ -1059,7 +1084,6 @@ void emotenoderef::updateParticles(float tick, const std::vector<emoteRender>& p
         emt.label = currentNode->label;
         chain.push_back(emt);
         p.ref->progress(age, chain, lim);
-        ++i;
     }
 }
 bool emotenoderef::draw(krkrsdl3::iTVPRenderBackend* renderer, void* target, emotelimit lim, void* maskTarget, bool inMaskPass)

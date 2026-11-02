@@ -91,9 +91,11 @@ Xvfb 总耗时 **18.65s → 12.78s**，最长呈现间隔 **652.9ms → 163.6ms*
 - [x] 资源：43 个 `.mtn` 全是明文 PSB v4，脚本不调用 `setEmotePSBDecryptSeed`。
 - [x] 修正 krkr-ns：`loopTime` 是循环起点（SD 先播开场再循环）；变量切换参数化节点时子动画从头播放、参数化主动画时钟不钳制（eyecatch）；
       补上粒子发射器（eyecatch 角色卡与泡泡、SD002/007/101/501），语义参照 [krkr2 motionplayer](https://github.com/2468785842/krkr2/tree/main/cpp/plugins/motionplayer) 的逆向实现。
-- [x] 视觉验证：eyecatch 与游戏自带静止画 `image/アイキャッチキャラ.png` 一致（角色、恵凪卡片按 `ch` 选中）；9 种标题背景 GL 与 CPU 两种后端逐像素一致
-      （差异 ≤161 px，均为边缘）；全部 40 个场景的缩略总览人工检查无缺图。与 Wine 原版的逐帧对照并入批次 8（原版在 Wine 下能运行，
-      但 Wayland 下截不到 GL 画面，也无法脚本化跳到指定场景）。
+- [x] 与 Wine 原版视觉对照：`tools/emote_compare.py`（见下方验收记录）。原版在 Wine 下需 `-nod3dm=yes -used2d=no`（D3D 动画播放器、D2D 绘制设备在 Wine 中失败），
+      通过游戏自带的 CialloHook（镜像目录的 `unencrypted/` 覆盖 `custom.tjs`）注入同一份截图脚本 `tools/emote_compare.tjs`，两边用 KAG 的 `captureSnapshot` 在相同时间点截图。
+      遮罩/混合（eyecatch 舞台遮罩、SD 叠加）、开场→循环段、粒子（eyecatch 角色卡与泡泡、SD002/007/101/501）均与原版一致。
+      物理、时间轴混合：只在 E-mote 角色文件（`_storageType=="emote"`，带 metadata 的 PSB）分支调用，本作 43 个 `.mtn` 全部 `metadata=None`、没有角色 PSB，
+      原版运行时这些接口同样不会被调用；眨眼等在 `.mtn` 里是普通关键帧，已包含在对照中。
 
 验收：标题 9 种背景（`title_bg0..7`、`title_bg_trial`，需全通存档解锁）、两个 Logo、eyecatch、全部 SD 场景播放正确；E-mote 场景 60fps。
 
@@ -102,6 +104,9 @@ Xvfb 总耗时 **18.65s → 12.78s**，最长呈现间隔 **652.9ms → 163.6ms*
 - 全覆盖场景：`tools/scenarios.py --only emote`（`artifacts/batch2-emote/`，GL 强制版 `artifacts/batch2-emote-gl/`）。
   两个 Logo、全部 31 个 SD 文件、9 种标题背景、eyecatch 都在播放（截图有变化），43 个 `.mtn` 全部加载，日志无异常，无 `source unsupported`。
 - 完整 smoke：`artifacts/batch2-smoke/`，只剩批次 4 的 DSP 异常。
+- 与原版对照：`python3 -I tools/emote_compare.py artifacts/batch2-compare`（`report.json` 为逐对 RMSE，`sheets/` 左原版右移植）。
+  6 个 SD（含 4 个带粒子）、`title_bg0`、`title_bg_trial`、标题、eyecatch，共 43 对截图。SD 全部时间点、标题背景定格帧 RMSE ≤0.035（多数 ≤0.008）；
+  较高值只出现在开场/转场进行中的帧（原版在 Wine 中首次加载更慢，开场整体晚约 300–500ms）和 eyecatch 定格帧（角色卡是 `particleMotionList` 里随机选的 4 个变体之一，两边抽到的不同）。
 - 帧率：`tools/benchmark.py --emote [--desktop]`，1080p，dummy 音频，`artifacts/batch2-measure-{desktop,xvfb}/`。
 
 | 环境/后端 | 场景 | Swap/s | 最长间隔(ms) |
@@ -113,8 +118,9 @@ Xvfb 总耗时 **18.65s → 12.78s**，最长呈现间隔 **652.9ms → 163.6ms*
 | Xvfb llvmpipe / CPU | SD105 | 98.9 | 26.2 |
 | Xvfb llvmpipe / CPU | eyecatch | 20.2 | 109.9 |
 
-E-mote 场景在桌面上平均都达到 60fps。剩余问题留给批次 7：eyecatch 每帧要读回 1080p 目标（约 5ms）再做 RGBA→BGRA 转换，且首次出现时上传贴图，最长间隔仍超过 25ms；
-纯 CPU（无 GPU）机器上 eyecatch 只有约 20fps（几十个全屏网格的光栅化）。
+在目标硬件（有 GPU，引擎本身就要求 GLES 3.2）上 E-mote 场景平均都达到 60fps。Xvfb 行是 llvmpipe 软件 GL：那里整个引擎都在 CPU 上渲染，
+E-mote 自动改用 CPU 光栅化，不是 60Hz 的目标环境，只作回归用。批次 7 继续压帧时间：eyecatch 每帧读回 1080p 目标（约 5ms）再做 RGBA→BGRA，
+首次出现时上传贴图，最长间隔 38ms（>25ms 的批次 7 标准）。
 
 ---
 
@@ -210,7 +216,7 @@ E-mote 场景在桌面上平均都达到 60fps。剩余问题留给批次 7：ey
 
 - [ ] 用全 CG 存档（`<游戏目录>/补丁/` 里有）验证鉴赏模式全部内容；各角色线用 skip（已读跳过）各跑一遍到 ED。
 - [ ] Wine 版与本移植逐项截图对比（标题、UI 各页、典型剧情画面、视频、SD）。
-      E-mote 重点：SD 的开场→循环段（`loopTime` 语义）、eyecatch 泡泡和角色卡（粒子发射数量/速度）、遮罩与混合模式。
+      E-mote 已在批次 2 用 `tools/emote_compare.py` 对照；同一注入方式可扩展到其他画面。
 - [ ] 交付：`<游戏目录>/linux/` 下放可执行文件 + 启动脚本 + `.desktop` + 图标（或保留 `~/lllj-krkrz/game/` 方式）；README 写清安装/构建。
 - [ ] 清理：删除 `game/` 以外的测试残留、关闭调试日志级别、`run.sh` 去掉开发用参数。
 

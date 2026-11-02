@@ -107,6 +107,7 @@ python3 -I tools/benchmark.py artifacts/after-01
 python3 -I tools/benchmark.py artifacts/desktop-01 --desktop
 python3 -I tools/scenarios.py artifacts/emote-01 --only emote   # 全部 43 个 .mtn
 python3 -I tools/benchmark.py artifacts/emote-desktop-01 --emote --desktop
+python3 -I tools/emote_compare.py artifacts/compare-01      # Wine 原版 vs 移植，需要 wine/Xvfb/ImageMagick
 ```
 
 Smoke 覆盖正常启动/Logo、标题、新游戏推进、backlog、存读档、CG/SD/音乐/立绘鉴赏入口、10 个设置分页、全屏/缩放、右键返回。

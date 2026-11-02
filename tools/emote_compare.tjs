@@ -1,0 +1,118 @@
+// E-mote side-by-side capture (batch 2). Runs unchanged in the original game
+// (injected through a CialloHook patch folder under Wine, see
+// tools/emote_compare.py) and in this port (loaded over the REPL), so both
+// capture the same scenes at the same times after the same script steps.
+// Captures go to System.dataPath + "ec_<name>.bmp" through KAG's
+// own captureSnapshot (all layers piled, as for save thumbnails).
+
+class LLLJEmoteCompare
+{
+	var timer;
+	var phase = 0;
+	var since = 0;
+	var item = 0;
+	var shot = 0;
+	var lastClick = 0;
+	var dir;
+	var log = [];
+
+	// [ev] name, capture times (ms after kag.process)
+	var items = [
+		[ "sd001a01",        [ 300, 900, 1500, 2500, 3500 ] ],
+		[ "sd002_ea01_ta01", [ 300, 900, 1500, 2500, 3500 ] ],
+		[ "sd007a",          [ 300, 900, 1500, 2500, 3500 ] ],
+		[ "sd101a_e01_r01",  [ 300, 900, 1500, 2500, 3500 ] ],
+		[ "sd105a_ea03_r02", [ 300, 900, 1500, 2500, 3500 ] ],
+		[ "sd501a_ra02",     [ 300, 900, 1500, 2500, 3500 ] ],
+		[ "title_bg0",       [ 500, 1500, 4000 ] ],
+		[ "title_bg_trial",  [ 500, 1500, 4000 ] ],
+		[ "*eyecatch",       [ 400, 800, 1200, 1600, 2000, 2400 ] ]
+	];
+
+	function LLLJEmoteCompare()
+	{
+		dir = System.dataPath + "ec_";
+		timer = new Timer(onTimer, "");
+		timer.interval = 16;
+		timer.enabled = true;
+		since = System.getTickCount();
+		note("start");
+	}
+
+	function note(text)
+	{
+		log.add("%d %s".sprintf(System.getTickCount(), text));
+		log.save(dir + "log.txt");
+	}
+
+	function capture(name)
+	{
+		var layer = new Layer(kag, kag.poolLayer);
+		try {
+			kag.captureSnapshot(layer);
+			layer.saveLayerImage(dir + name + ".bmp", "bmp");
+			note("capture " + name);
+		} catch (e) {
+			note("capture failed " + name + ": " + e.message);
+		}
+		invalidate layer;
+	}
+
+	function elapsed() { return System.getTickCount() - since; }
+	function next() { phase++; since = System.getTickCount(); }
+
+	function onTimer()
+	{
+		try {
+			step();
+		} catch (e) {
+			note("error: " + e.message);
+			timer.enabled = false;
+		}
+	}
+
+	function step()
+	{
+		switch (phase) {
+		case 0: // title shown and settled (caution/logos pass on their own)
+			if (typeof global.kag != "Object" || typeof global.SystemHook != "Object") return;
+			if (SystemHook.currentState != "title" || !kag.inStable) {
+				// caution screen waits for a click; logos also accept it
+				if (System.getTickCount() - lastClick > 2000) { lastClick = System.getTickCount(); kag.onPrimaryClick(); }
+				since = System.getTickCount();
+				return;
+			}
+			if (elapsed() < 4000) return;
+			capture("title");
+			kag.process("title.ks", "*game");
+			next();
+			break;
+		case 1: // in game
+			if (typeof world_object.player != "Object" || world_object.player.curPoint <= 0) { since = System.getTickCount(); return; }
+			if (elapsed() < 1500) return;
+			note("game");
+			next();
+			break;
+		case 2: // start the next item
+			if (item >= items.count) { note("done"); timer.enabled = false; return; }
+			var name = items[item][0];
+			if (name.charAt(0) == "*") kag.process("emote_test.ks", name);
+			else { tf.llljEv = name; kag.process("emote_test.ks", "*ev"); }
+			note("show " + name);
+			shot = 0;
+			next();
+			break;
+		case 3: // timed captures
+			var times = items[item][1];
+			if (shot < times.count && elapsed() >= times[shot]) {
+				var name = items[item][0];
+				if (name.charAt(0) == "*") name = name.substring(1);
+				capture("%s_%d".sprintf(name, times[shot]));
+				shot++;
+			}
+			if (shot >= times.count) { item++; phase = 2; since = System.getTickCount(); }
+			break;
+		}
+	}
+}
+global.llljEmoteCompare = new LLLJEmoteCompare();

@@ -53,7 +53,8 @@ Local changes to upstream files (search for "LLLJ")
       - an embedded motion under a parameterized node restarts from 0 when the
         variable switches the node's content (eyecatch state 0 -> 1)
       - particle emitters ("particle/point|ellipse|quad" sources): eyecatch
-        character card and bubbles, sweat/sparkle effects in SD002/007/101/501
+        character card and bubbles, sweat/sparkle effects in SD002/007/101/501;
+        a clock that jumps is caught up one frame at a time (max 10 s)
   emoteplayerclass.cpp
       - a parameterized main motion's clock is not clamped at lastTime (its
         frame comes from a variable; the clock drives embedded motions)

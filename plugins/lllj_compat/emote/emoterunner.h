@@ -95,9 +95,10 @@ namespace emoteplayer
         float particleTimer = 0;
         bool particleFrequencyActive = false;
         emoteframe* particleLastFrame = nullptr;
-        uint32_t particleRng = 0x2545F491u;
+        uint32_t particleRng = 0; // seeded on first use; the original picks variants at random
         float particleRandom();
         void updateParticles(float tick, const std::vector<emoteRender>& parentRender, emotelimit lim);
+        void stepParticles(float tick, float dt);
 
         // render method
         std::vector<emoteRender> renderMethod;
