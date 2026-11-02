@@ -10,7 +10,8 @@
 批次 2 已实现：E-mote（Logo、标题 9 种背景、eyecatch、全部 SD）由 `plugins/lllj_compat/emote/`（krkr-ns emoteplayer + 本地修正 + 粒子）播放，
 硬件 GL 下网格在 GPU 光栅化。验收数据见 `PLAN.md` 批次 2。
 批次 3 已实现：OP/ED 视频由 `plugins/lllj_compat/src/FFmpegMoviePlayer.cpp`（预构建 FFmpeg，`tools/fetch_ffmpeg.sh`）播放，验收数据见 `PLAN.md` 批次 3。
-**后续**：DSP、其余插件、汉化和完整 60Hz 优化仍按各自批次处理。
+批次 4 已实现：语音特效（带通/延迟/混响，`src/wave_filters.cpp`）与多轨 BGM `.mchx`（`src/multitrack.cpp`），验收数据见 `PLAN.md` 批次 4。
+**后续**：其余插件、汉化和完整 60Hz 优化仍按各自批次处理。
 
 ## 2. 关键路径
 
@@ -73,6 +74,14 @@ python3 -I tools/verify_windows_saves.py artifacts/win-01
   （系统里有同 soname 但缺 wmv3/wmapro 的 openSUSE 版本，别让它被加载）。`LLLJNative.movieStats()` 给出帧/丢帧/落后/欠载。
   prelude 让 `System.getOSVersion` 报 Windows 10，原版 `SelectMovieFile` 因此选 `op.mp4`。
 
+- **音频**（`src/wave_filters.cpp`、`src/multitrack.cpp`）：游戏的 `voiceeffect.tjs` 把 `.ini` 里的每行表达式用 `Scripts.eval(..., VoiceEffectFactory)` 求值，
+  得到 `WaveSoundBuffer.WaveDSPFilter/DelayEffect/StkFreeVerb` 实例后放进 `buf.filters`。这几个类在安装阶段原生挂到 `WaveSoundBuffer` 上，
+  `wfbasiceffect/wftypicaldsp/wumultitrack.dll` 只需 link 成功（prelude 空壳）。三个类共用一个原生实例类型 `LLLJWaveFilter`，
+  差异只在 `Effect` 子类（`prepare/process/reset/tailMs`）。剧本实际只用 `BandPass_Butterworth`、`Delay`、`Verb`；
+  EQ/Vocoder/RingModulation/Osc*/GainLimit/OscLoop（`wvdecoder`）无引用，未实现（工厂调用时走脚本自带的 errorSound）。
+  `.mchx` 由注册的 wave decoder 处理，打开时回调 `WaveSoundBuffer.multiTrackOpenCallbacks`（脚本据此拿到 `mtrack_id`），
+  `setMultiTrackMask(id, name|void, vol, ms)` 改各轨增益。`setDelayMultiTrackMask` 未实现，脚本用 typeof 检测后退化为立即切换。
+
 ## 5. 踩过的坑（都已解决，别再踩）
 
 1. **`kirikiriz_generic`**：krkrz 的 SysInitScript 定义了全局常量 `kirikiriz_generic=1`，游戏会当成主机版（忽略 `Plugins.link`、开 Switch UI、xp3 当文件夹）。
@@ -104,6 +113,10 @@ python3 -I tools/verify_windows_saves.py artifacts/win-01
 14. **视频素材特性**：WMA Pro 在 seek 后输出不带时间戳的帧（不处理会把音频起点当成 0，视频永远等时钟）；WMV3 关键帧间隔 5 秒，
     seek 后要先压住音频直到首帧就绪。ED 开头常有几秒纯黑，判断"画面在动"要先 seek 到片中。左键不跳过视频是游戏设计（`tflags.sysmovie_skip`），右键/Esc 才跳。
     xdotool 在 Wayland 桌面找不到窗口，`--desktop` 测量里不要用 `session.key/click`。
+15. **滤镜链**：`buf.filters` 只是普通数组，引擎只在 `open()` 时按各元素的 `interface` 属性重建链（`WaveIntf.cpp` `RebuildFilterChain`），
+    之后增删要重新 open 才生效；`iTVPBasicWaveFilter::Update()` 从不被调用，参数只能在 `Decode` 里读。音源结束（上游返回不足）后，
+    宿主类继续喂静音直到 `extend` 用完，并入队 `tTVPWaveSegment(lastPos, 0, n)`，所以尾音期间 `position` 不可信。
+16. **REPL 里的日文**：`json.dumps` 默认把非 ASCII 转成 `\uXXXX`，TJS 字符串不认，文件名会变成别的东西；传给 REPL 时用 `ensure_ascii=False`。
 
 ## 6. 当前已知问题（详见 PLAN.md 对应批次）
 
@@ -112,7 +125,8 @@ python3 -I tools/verify_windows_saves.py artifacts/win-01
 | eyecatch 在桌面平均约 70fps，但最长帧约 38ms（1080p 读回+转换、首次贴图上传）；无 GPU 时约 20fps | 批次 7 |
 | 视频期间桌面最长呈现间隔 26–28ms（>25ms）；真实声卡下的音画同步尚待人工实听 | 批次 7 |
 | 视频字幕（汉化版 `.ass`）未接；接入点是 `FFmpegMoviePlayer.cpp` 的 `Deliver` | 批次 6 |
-| `voiceeffect.tjs DSP` 异常（电话/对讲机音效缺） | 批次 4 |
+| 延迟的 dry/wet 语义（按 STK 习惯交叉淡化）和混响电平尚未与 Wine 原版实听对比；多轨按各轨直接相加，部分素材（`rgb_live`）相加后超过 0dBFS | 批次 4 人工复核 |
+| 鉴赏音乐页频谱（`fftgraph.dll` 的 `drawFFTGraph`）缺失，提示「fftgraph.dllがありません」；引擎有 `getSoundSpectrum` 可用 | 批次 5 |
 | 颜色选择器依赖 layerExDraw；当前显示色样，禁用缺失的轮盘实现 | 批次 5 |
 | layerStwCopy 附加系统转场未实现；当前使用原有规则转场 | 批次 5 |
 | 汉化 UI、字幕及语言切换尚未挂载；读汉化存档不等于完成汉化 | 批次 6 |

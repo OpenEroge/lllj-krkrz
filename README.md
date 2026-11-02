@@ -78,6 +78,12 @@ Alt+Enter 切换全屏；缩放和右键返回已回归。系统操作使用游�
   - `FFmpegMoviePlayer.cpp`：VideoOverlay 的 mp4/wmv/asf 后端（libavformat/libavcodec，结构仿 krkrz 的 `Mpeg1MoviePlayer`：
     自有解码线程、以音频 sink 的已播放采样数为主时钟、seek 后先压住音频直到首帧就绪），经引擎补丁的 `TVPExternalMoviePlayerFactory` 注册。
     `LLLJNative.movieStats()` 返回最近一个视频的出帧/丢帧/最大落后/解码耗时/欠载。
+  - `wave_filters.cpp`：`voiceeffect.tjs` 用的 WaveSoundBuffer 滤镜（`WaveDSPFilter`、`DelayEffect`、`StkFreeVerb`），和引擎的 PhaseVocoder 一样放进 `buf.filters`。
+    一个宿主类负责格式转换、segment 透传和音源结束后的尾音（`extend` 毫秒），各效果只处理交错 float。
+    `WaveDSPFilter` 用 vendor 的 DSPFilters（MIT，`third_party/DSPFilters/`），类型/族名与参数顺序与原插件一致。
+    `LLLJNative.waveFilterGain(filter, hz)` 离线测幅频响应（测试用）。
+  - `multitrack.cpp`：`.mchx` 多轨 BGM 解码器（清单里的多声道 opus 按 `track` 声道对混成立体声，各轨增益可渐变），
+    `WaveSoundBuffer.multiTrackOpenCallbacks` / `setMultiTrackMask`（`MultiTrackMusicSupport` 用）。
 - **引擎补丁**：大小写回退、auto-path 增量索引、正常查找失败后的 Hxv4 文件名回退、SDLOGL 计时和 `recreate()` 兼容入口、
   外部视频播放器工厂钩子、VideoOverlay 的 `setPeriodEvent` / `setSegmentLoop`。游戏专用改动由 `KRKRZ_LLLJ` 控制。
 
@@ -118,6 +124,7 @@ python3 -I tools/scenarios.py artifacts/movie-01 --only movie   # 鉴赏里的 O
 python3 -I tools/scenarios.py artifacts/movie-layer-01 --only movie --vomstyle layer   # 强制模式，只播 OP
 python3 -I tools/benchmark.py artifacts/movie-desktop-01 --movie --desktop
 python3 -I tools/emote_compare.py artifacts/compare-01      # Wine 原版 vs 移植，需要 wine/Xvfb/ImageMagick
+python3 -I tools/scenarios.py artifacts/audio-01 --only audio   # 语音特效 + 多轨 BGM
 ```
 
 Smoke 覆盖正常启动/Logo、标题、新游戏推进、backlog、存读档、CG/SD/音乐/立绘鉴赏入口、10 个设置分页、全屏/缩放、右键返回。
@@ -125,7 +132,9 @@ Smoke 覆盖正常启动/Logo、标题、新游戏推进、backlog、存读档�
 E-mote 后端可用 `-lllj_emote=cpu|gl` 强制；`LLLJNative.emoteStats()` 返回各阶段耗时。
 `--only movie` 从鉴赏入口逐个播放 8 个视频：核对打开的文件、跳到 30 秒后画面在变且位置前进，
 再分别以播完（跳到结尾前 3 秒）、右键、Esc 返回鉴赏，并要求视频落后音频时钟不超过 60ms。
-脚本只接受已确认的 DSP 调用点例外；其余异常、REPL 失败和超时返回非零。
+`--only audio`：带通幅频响应、剧本引用的 16 个特效 + `wf_reverb` 经游戏自己的 `loadFilter`/`VoiceEffectFactory` 构造后播放
+（有输出、尾音长度符合 `extend`）、语音缓冲的 `语音|特效` 路径和口型电平、14 个 `.mchx` 的打开回调与静音/恢复。
+任何 `exception occured`、REPL 失败和超时都返回非零（不再有已知例外）。
 
 `./run.sh -lllj_fps=yes` 每秒输出 `(lllj) fps: {...}`，不需要显示统计叠层。TJS 可用
 `LLLJNative.resetFrameStats("scene")`、`LLLJNative.frameStats()`、`LLLJNative.storageStats()`。

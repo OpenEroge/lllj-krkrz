@@ -341,6 +341,10 @@ lllj_shim("menu.dll", lllj_nothing);
 
 lllj_shim(["drawdeviced2d.dll"], lllj_nothing);
 lllj_shim(["k2compat.dll", "msdfrender.dll", "layerstwcopy.dll"], lllj_nothing);
+// voice effects / multi-track BGM: the classes the game uses are native static members of
+// WaveSoundBuffer installed at startup (src/wave_filters.cpp: WaveDSPFilter, DelayEffect,
+// StkFreeVerb; src/multitrack.cpp: .mchx, setMultiTrackMask), so linking only has to succeed.
+// wvdecoder (WaveSoundData) only backs the unused OscLoop effect.
 lllj_shim(["wfbasiceffect.dll", "wftypicaldsp.dll", "wumultitrack.dll", "wvdecoder.dll"], lllj_nothing);
 lllj_shim(["httprequest.dll", "win32ole.dll", "gamepad.dll", "shellexecute.dll", "process.dll",
 		   "messenger.dll", "addfont.dll"], lllj_nothing);

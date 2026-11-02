@@ -154,14 +154,7 @@ def check_log(path):
     import re
     text = Path(path).read_text(errors="replace")
     matches = list(re.finditer(r"exception occured at ([^(]+)\(\d+\)\[\(function\) ([^\]]+)\], VM ip = (\d+)", text))
-    known, unknown = [], []
-    for i, match in enumerate(matches):
-        site = match.groups()
-        block = text[match.end():matches[i + 1].start() if i + 1 < len(matches) else len(text)]
-        if site == ("voiceeffect.tjs", "Verb", "6") and '(string)"WaveSoundBuffer"' in block and '(string)"StkFreeVerb"' in block:
-            known.append({"site": list(site), "reason": "batch 4: missing DSP"})
-        else:
-            unknown.append(site)
+    known, unknown = [], [match.groups() for match in matches]
     # Also reject fatal errors and exception headers the parser did not recognize.
     headers = text.count("exception occured")
     if "source unsupported" in text:  # E-mote content the runtime cannot draw
@@ -471,12 +464,115 @@ def movie(session, vomstyle=None):
     return check_log(session.out / "game.log")
 
 
+# Every voice effect the scenarios reference (spelled as there: upper-case
+# prefixes, lower-case files) plus the movie-sample reverb, with their tails (ms).
+VOICE_EFFECTS = {"DL_メッセージ": 300, "RV_DSP_ライブマイク": 1000, "DL_回想": 600, "DSP_電話": 0,
+                 "RV_ライブハウス": 1000, "DL_心の声": 300, "DSP_ドア越し": 0, "DSP_インターホン": 0,
+                 "DSP_配信": 0, "RV_DSP_体育館マイク": 1000, "DSP_DL_校内放送": 400,
+                 "DSP_DL_ライブマイク野外": 400, "DSP_ノートPC": 0, "RV_風呂": 1000, "DSP_放送": 0,
+                 "DSP_テレビ": 0, "wf_reverb": 1000}
+TEST_VOICE = "anj_000_0001.ogg"
+PLAY_WITH_EFFECT = """(function(name){
+    var ex = kag.voiceEffectPlugin.loadFilter(name, false);
+    var fs = [];
+    for (var i = 0; i < ex.count; i++) fs.add(Scripts.eval(ex[i], void, void, VoiceEffectFactory));
+    var b = new WaveSoundBuffer(kag);
+    b.filters.assign(fs);
+    b.open("%s");
+    b.play();
+    global.llljFx = %%[buf: b, start: System.getTickCount()];
+    return %%[exprs: ex, filters: fs.count];
+})""" % TEST_VOICE
+# the target buffer receives mtrack_id from the open callback, as in MTrackHackedEnvMusicObject
+OPEN_MULTITRACK = """(function(storage){
+    var b = new WaveSoundBuffer(kag);
+    SystemConfig.MultiTrackTargetBuffer = b;
+    b.open(storage);
+    SystemConfig.MultiTrackTargetBuffer = null;
+    b.play();
+    global.llljMt = b;
+    return %[id: b.mtrack_id, tracks: SystemConfig.MultiTrackSupport[b.mtrack_id]["*"]];
+})"""
+
+
+def number(session, expression):
+    return float(session.ev(f"string({expression})").strip('"'))
+
+
+def peak_level(session, buf, seconds):
+    peak, end = 0.0, time.monotonic() + seconds
+    while time.monotonic() < end:
+        peak = max(peak, number(session, f"{buf}.sampleValue"))
+        time.sleep(0.03)
+    return peak
+
+
+def audio(session):
+    """Voice effects and multi-track BGM (batch 4)."""
+    session.boot()
+    session.ev('Plugins.link("getSample.dll")')  # sampleValue, as voice.tjs links it
+    # Butterworth band pass (dsp_電話 etc.) from the game's own factory; the
+    # DSPFilters design's amplitude response is 0.155 / 0.990 / 0.112.
+    session.ev('global.llljBp = Scripts.eval("BandPass_Butterworth(2,1900,2900)", void, void, VoiceEffectFactory)')
+    gains = [number(session, f"LLLJNative.waveFilterGain(llljBp, {hz})") for hz in (200, 1900, 8000)]
+    session.steps.append({"name": "band_pass_response", "hz": [200, 1900, 8000], "gain": gains})
+    for got, want in zip(gains, (0.155, 0.990, 0.112)):
+        assert abs(got - want) < 0.05, f"band pass response {gains}"
+
+    total = number(session, f'(function(){{var b=new WaveSoundBuffer(kag);b.open("{TEST_VOICE}");var t=b.totalTime;invalidate b;return t;}})()')
+    for name, tail in VOICE_EFFECTS.items():
+        info = session.obj(f"{PLAY_WITH_EFFECT}({json.dumps(name, ensure_ascii=False)})")
+        assert info["exprs"] and info["filters"] == len(info["exprs"]), f"{name}: {info}"
+        level, deadline = 0.0, time.monotonic() + 10
+        while (value := number(session, 'llljFx.buf.status == "stop" ? -1 : llljFx.buf.sampleValue')) >= 0:
+            assert time.monotonic() < deadline, f"{name}: playback never ended"
+            level = max(level, value)
+            time.sleep(0.03)
+        elapsed = int(session.ev("System.getTickCount() - llljFx.start"))
+        session.ev("invalidate llljFx.buf")
+        session.steps.append({"name": f"voeff_{name}", "exprs": info["exprs"], "voice_ms": total,
+                              "played_ms": elapsed, "peak": level})
+        print(f"{name}: {' + '.join(info['exprs'])} -> {elapsed}ms (voice {total:.0f}ms, tail {tail}ms)", flush=True)
+        assert level > 0.001, f"{name}: silent output"
+        # the chain keeps ringing for the effects' extend time after the voice ends
+        assert total + tail * 0.8 - 300 <= elapsed <= total + tail * 2 + 1200, f"{name}: played {elapsed}ms"
+    # the game's own voice path: CustomVoiceSoundBuffer splits "voice|effect" and
+    # inserts the chain; sampleValue (getSample) drives the lip sync (LIPLEVEL1 0.01)
+    session.ev(f'kag.voices[0]._start("{TEST_VOICE}|DSP_電話")')
+    chain = number(session, "kag.voices[0].filters.count")
+    lip = peak_level(session, "kag.voices[0]", 1.5)
+    session.steps.append({"name": "voice_buffer_effect", "filters": chain, "peak_sample_value": lip})
+    assert chain == 1 and lip > 0.01, f"voice buffer: filters={chain} sampleValue peak={lip}"
+    session.write_report()
+
+    tracks = sorted(p.name for p in (ROOT / "game/bgm").glob("*.mchx"))
+    assert len(tracks) == 14, tracks
+    for storage in tracks:
+        mt = session.obj(f"{OPEN_MULTITRACK}({json.dumps(storage)})")
+        assert mt["id"] and mt["tracks"], f"{storage}: {mt}"
+        mid = json.dumps(mt["id"])
+        full = peak_level(session, "llljMt", 1.5)
+        session.ev(f"WaveSoundBuffer.setMultiTrackMask({mid}, void, 0, 0)")
+        time.sleep(1.2)  # let already queued audio drain
+        muted = peak_level(session, "llljMt", 0.5)
+        session.ev(f"WaveSoundBuffer.setMultiTrackMask({mid}, void, 1, 300)")
+        time.sleep(1.2)
+        restored = peak_level(session, "llljMt", 1.0)
+        session.ev("invalidate llljMt")
+        session.steps.append({"name": f"mtrack_{storage}", **mt, "peak_all": full, "peak_muted": muted, "peak_restored": restored})
+        print(f"{storage}: {mt['tracks']} all={full:.4f} muted={muted:.6f} restored={restored:.4f}", flush=True)
+        # some intros are silent, so either unmuted window may carry the music
+        assert max(full, restored) > 0.0005 and muted < 1e-6, f"{storage}: mask had no effect"
+    session.write_report()
+    return check_log(session.out / "game.log")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("out", type=Path)
     parser.add_argument("lines", nargs="?", type=int, default=6)
     parser.add_argument("--sample-seconds", type=float, default=1)
-    parser.add_argument("--only", choices=("all", "gallery", "settings", "controls", "emote", "movie"), default="all")
+    parser.add_argument("--only", choices=("all", "gallery", "settings", "controls", "emote", "movie", "audio"), default="all")
     parser.add_argument("--vomstyle", choices=("overlay", "mixer", "layer", "mfevr"),
                         help="movie: force a VideoOverlay mode and only play the OP")
     args = parser.parse_args()
@@ -489,6 +585,8 @@ def main():
             known = emote(session)
         elif args.only == "movie":
             known = movie(session, args.vomstyle)
+        elif args.only == "audio":
+            known = audio(session)
         else:
             session.boot()
             session.finish_startup()

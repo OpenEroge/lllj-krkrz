@@ -1,0 +1,5 @@
+DSPFilters by Vinnie Falco (MIT, see LICENSE)
+https://github.com/vinniefalco/DSPFilters  commit acc49170e79a94fcb9c04b8a2116e9f8dffd1c7d
+Copied: shared/DSPFilters/include/DspFilters and shared/DSPFilters/source (minus Documentation.cpp), unmodified.
+Used by src/wave_filters.cpp for WaveSoundBuffer.WaveDSPFilter (the original wfTypicalDSP
+plugin exposes exactly these Type/Family names and parameter order).

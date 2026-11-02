@@ -26,6 +26,10 @@ set_source_files_properties(${LLLJ_EMOTE_SRC} DIRECTORY ${CMAKE_SOURCE_DIR}/src/
 set_property(SOURCE ${LLLJ_EMOTE_SRC} DIRECTORY ${CMAKE_SOURCE_DIR}/src/core
     APPEND PROPERTY COMPILE_DEFINITIONS LLLJ_EMOTE_GL)
 
+# DSPFilters (MIT, third_party/DSPFilters/UPSTREAM.txt) for WaveSoundBuffer.WaveDSPFilter
+# (src/wave_filters.cpp).
+file(GLOB LLLJ_DSPFILTERS_SRC CONFIGURE_DEPENDS ${LLLJ_DIR}/third_party/DSPFilters/source/*.cpp)
+
 # Prebuilt LGPL shared FFmpeg (tools/fetch_ffmpeg.sh) for the movie backend
 # (src/FFmpegMoviePlayer.cpp). The libraries are copied next to the executable
 # by run.sh; $ORIGIN is added as a DT_RPATH (the engine links with
@@ -42,9 +46,9 @@ foreach(lib avformat avcodec avutil)
 endforeach()
 set(CMAKE_BUILD_RPATH ${CMAKE_BUILD_RPATH} "\$ORIGIN" PARENT_SCOPE)
 
-set(KRKRZ_SRC_ADD ${KRKRZ_SRC_ADD} ${LLLJ_SRC} ${LLLJ_EMOTE_SRC} PARENT_SCOPE)
+set(KRKRZ_SRC_ADD ${KRKRZ_SRC_ADD} ${LLLJ_SRC} ${LLLJ_EMOTE_SRC} ${LLLJ_DSPFILTERS_SRC} PARENT_SCOPE)
 set(KRKRZ_LIB_ADD ${KRKRZ_LIB_ADD} ${LLLJ_FFMPEG_LIBS} PARENT_SCOPE)
 set(KRKRZ_INC ${KRKRZ_INC} ${LLLJ_DIR}/src ${CMAKE_CURRENT_BINARY_DIR}
     ${LLLJ_DIR}/emote/shim ${LLLJ_DIR}/emote ${CMAKE_SOURCE_DIR}/src/plugins
-    ${LLLJ_FFMPEG_DIR}/include
+    ${LLLJ_FFMPEG_DIR}/include ${LLLJ_DIR}/third_party/DSPFilters/include
     ${CMAKE_SOURCE_DIR}/src/core/external/movie-player/extlibs/libyuv/include PARENT_SCOPE)
