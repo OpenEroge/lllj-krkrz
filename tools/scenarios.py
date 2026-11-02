@@ -510,6 +510,7 @@ def peak_level(session, buf, seconds):
 def audio(session):
     """Voice effects and multi-track BGM (batch 4)."""
     session.boot()
+    session.finish_startup()  # settle at the title like the other scenarios
     session.ev('Plugins.link("getSample.dll")')  # sampleValue, as voice.tjs links it
     # Butterworth band pass (dsp_電話 etc.) from the game's own factory; the
     # DSPFilters design's amplitude response is 0.155 / 0.990 / 0.112.

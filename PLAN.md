@@ -172,13 +172,35 @@ E-mote 自动改用 CPU 光栅化，不是 60Hz 的目标环境，只作回归�
 
 目标：`sysscn/voiceeffect.tjs`（剧本里调用约 1700 次：电话、对讲机、混响、回声…）和语音相关设置全部生效。
 
-- [ ] `wfBasicEffect` / `wfTypicalDSP`：WaveSoundBuffer 滤镜（`BandPass/Butterworth`、`GraphicEqualizer`、`StkFreeVerb`、`DelayEffect`、`Vocoder`、`Osc*`…）。
-      先确认 krkrz 的 `WaveSoundBuffer.filters` 接口（`common/sound/`）怎么挂自定义滤镜；行为规格可参考 Kirakira（AGPL，只看不抄）。
-- [ ] `wvdecoder`（`WaveSoundData`）、`wumultitrack`（`setMultiTrackMask`、`.mchx`）。
-- [ ] `getSample`（口型同步）已静态链接，确认立绘嘴型随语音动。
-- [ ] 音量/声道设置、角色单独音量、BGV、「お気に入りボイス」。
+实际用量：剧本引用 16 个 `voice/*.ini`（另有 `patch/dsp_テレビ.ini`、视频鉴赏用的 `wf_reverb`），只用到三种表达式：
+`BandPass_Butterworth(order,fc,bw)`、`Delay(ms,fb,mix,extend)`、`Verb(mix,room,damp,width,mode,extend)`。BGM 的 `track=` 依赖 14 个 `.mchx`。
+
+- [x] `wfBasicEffect` / `wfTypicalDSP`：`plugins/lllj_compat/src/wave_filters.cpp` 提供 `WaveSoundBuffer.WaveDSPFilter/DelayEffect/StkFreeVerb`，
+      与引擎 PhaseVocoder 相同地放进 `buf.filters`（链只在 `open()` 时按 `interface` 属性重建）。一个宿主类负责 float 转换、segment 透传和尾音，
+      `WaveDSPFilter` 用 vendor 的 DSPFilters（MIT，类型/族名与参数顺序与原插件一致，45 种组合全给），Verb 是按 STK FreeVerb 参数映射的 Freeverb。
+      EQ/Vocoder/RingModulation/Osc*/Math*/GainLimit 无引用，未实现。
+- [x] `wumultitrack`：`src/multitrack.cpp` 注册 `.mchx` 解码器（多声道 opus 按 `track` 声道对混成立体声，各轨增益可渐变），
+      实现 `multiTrackOpenCallbacks`、`setMultiTrackMask`；`setDelayMultiTrackMask` 未实现（脚本 typeof 检测后退化为立即切换）。
+      `wvdecoder`（`WaveSoundData`）只服务于无引用的 `OscLoop`，保持空壳。
+- [x] `getSample`（口型同步）：语音缓冲经 `语音|特效` 路径播放时 `sampleValue` 峰值 0.52（> `LIPLEVEL1` 0.01）；立绘嘴型画面未单独截图核对。
+- [ ] 音量/声道设置、角色单独音量、BGV、「お気に入りボイス」：均为引擎原生或纯脚本（`volume2`、`setGainQueryCallback`、`voicemode.tjs`），本批未专门验证。
 
 验收：抽查 10 处带特效的语音和 Wine 版对比听感一致；`DSP` 异常消失。
+
+### 批次 4 验收记录（2026-11-02）
+
+- 场景：`python3 -I tools/scenarios.py artifacts/batch4-audio --only audio`（连续两次通过，`artifacts/batch4-audio{,-2}/`）。
+  - 带通 `BandPass_Butterworth(2,1900,2900)` 经游戏的 `VoiceEffectFactory` 构造，`LLLJNative.waveFilterGain` 幅频响应 200Hz/1.9kHz/8kHz =
+    0.155/0.990/0.112，与 DSPFilters 设计值一致。
+  - 17 个特效经游戏的 `loadFilter` + `VoiceEffectFactory` 构造（剧本里的大写名能找到小写文件），全部有输出；1527ms 的语音在纯带通下约 2.1s
+    （含输出延迟）停止，带 Delay/Verb 的按 `extend` 延长到 2.2–3.2s。
+  - 语音缓冲 `kag.voices[0]._start("…|DSP_電話")` 插入 1 个滤镜并播放，口型电平见上。
+  - 14 个 `.mchx` 全部打开并经回调拿到 `mtrack_id` 和轨名；全部静音后电平为 0，恢复后有声。
+- 回归：`artifacts/batch4-smoke/`、`artifacts/batch4-emote/`、`artifacts/batch4-movie/` 通过，日志 0 个 `exception occured`；
+  `check_log` 已去掉 StkFreeVerb 例外，任何异常都算失败。
+- 未完成：与 Wine 原版的听感对比（Delay 的 dry/wet 按 STK 习惯交叉淡化、Verb 电平需据此校准）需在桌面 `./run.sh` 人工进行。
+  多轨按各轨直接相加，`rgb_live` / `rgb_guitarslap` 素材相加后峰值约 1.4（单轨已达 1.2），属素材特性。
+  鉴赏音乐页的频谱（`fftgraph.dll`）移到批次 5。
 
 ---
 
@@ -192,6 +214,8 @@ E-mote 自动改用 CPU 光栅化，不是 60Hz 的目标环境，只作回归�
 - [ ] **msdfrender**（`prerenderfontex.tjs` 的 `sysfont/headfont/numfont…_atlas`）：确认现在的回退渲染与原版观感差异，必要时实现。
 - [ ] **extNagano**（blurfade、flutter、honeyturn、multiripple、scanline、zoomfade、spin）和 **extrans**（mosaic 在 184 个 scn 里用到）逐个跑一遍。
 - [ ] GlitchEffect、layerStwCopy（`stitchWrappedCopy`）、k2compat 需要的原生部分、`System.fetchImageSize` 等零散 API。
+- [ ] **fftgraph**：鉴赏音乐页频谱 `drawFFTGraph(layer, buf, 1, 0, w-1, h, %[type:1, division:22, thick:3, oncolor, peakcolor, offcolor, bgcolor])`
+      （`exgallery.tjs` 的 `ExSoundGallerySpeanaModule`），可用引擎的 `getSoundSpectrum` 在 prelude 实现；画法需与 Wine 截图对照。
 - [ ] 手柄：`GamepadPort` 现在是空壳，接 krkrz 自带的 SDL 手柄输入（`doc/Gamepad.md`）。
 - [ ] 流程图（フローチャート）、backlog、语音回放、截图功能（snapcapture）、鉴赏模式各页。
 
