@@ -56,7 +56,9 @@ global.LLLJ = %[
 		// motion.tjs falls through to the nod3d name when only its placeholder exists.
 		"motionplayer_nod3d.dll" => "lllj_emote",
 		// layerExDraw (GDI+ emulation): krkr-ns port built into the exe (plugins/lllj_compat/layerexdraw).
-		"layerexdraw.dll" => "lllj_layerexdraw"
+		"layerexdraw.dll" => "lllj_layerexdraw",
+		// TextRenderBase: krkrsdl3 port built into the exe (plugins/lllj_compat/textrender).
+		"textrender.dll" => "lllj_textrender"
 	],
 	origLink : Plugins.link,
 	origUnlink : Plugins.unlink
@@ -376,7 +378,7 @@ function lllj_shim_toml() { Scripts.tomlDecodeFromStorage = LLLJNative.tomlDecod
 lllj_shim("toml.dll", lllj_shim_toml);
 
 // TODO (real implementations needed)
-lllj_shim(["psbfile.dll", "textrender.dll"], lllj_nothing);
+lllj_shim("psbfile.dll", lllj_nothing);
 lllj_shim("motionplayer.dll", lllj_nothing); // D3D variant: no placeholder, never selected
 
 // Minimal MenuItem replacement (no native menus on this platform)

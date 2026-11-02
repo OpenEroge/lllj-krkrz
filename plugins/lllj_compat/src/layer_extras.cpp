@@ -137,20 +137,32 @@ LLLJ_NATIVE(stitchWrappedCopy)
 // loaded, which is what the callers test for. The image is decoded by
 // TVPLoadGraphic, the path Layer.loadImages uses, so names resolve identically
 // (auto path, missing extension).
+// Also used by textrender/ for graph characters without onGetGraphSize.
+bool Layer_FetchImageSize(ttstr imageName, int &width, int &height)
+{
+	tTVPBaseBitmap bitmap(1, 1, 32); // the loader sizes it to the image
+	try {
+		TVPLoadGraphic(&bitmap, imageName, TVP_clNone, 0, 0, glmNormal);
+	} catch (...) {
+		return false;
+	}
+	width = (int)bitmap.GetWidth();
+	height = (int)bitmap.GetHeight();
+	return true;
+}
+
 LLLJ_NATIVE(fetchImageSize)
 {
 	if (numparams < 1) return TJS_E_BADPARAMCOUNT;
-	tTVPBaseBitmap bitmap(1, 1, 32); // the loader sizes it to the image
-	try {
-		TVPLoadGraphic(&bitmap, ttstr(*param[0]), TVP_clNone, 0, 0, glmNormal);
-	} catch (...) {
+	int width, height;
+	if (!Layer_FetchImageSize(ttstr(*param[0]), width, height)) {
 		if (result) result->Clear(); // void, not the VM's default integer
 		return TJS_S_OK;
 	}
 	iTJSDispatch2 *array = TJSCreateArrayObject();
 	tTJSVariant r(array, array);
 	array->Release();
-	tTJSVariant w((tjs_int)bitmap.GetWidth()), h((tjs_int)bitmap.GetHeight());
+	tTJSVariant w((tjs_int)width), h((tjs_int)height);
 	array->PropSetByNum(TJS_MEMBERENSURE, 0, &w, array);
 	array->PropSetByNum(TJS_MEMBERENSURE, 1, &h, array);
 	if (result) *result = r;

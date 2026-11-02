@@ -35,6 +35,13 @@ file(GLOB LLLJ_LAYEREXDRAW_SRC CONFIGURE_DEPENDS ${LLLJ_DIR}/layerexdraw/*.cpp)
 set_source_files_properties(${LLLJ_LAYEREXDRAW_SRC} DIRECTORY ${CMAKE_SOURCE_DIR}/src/core
     PROPERTIES COMPILE_OPTIONS
     "-include;${LLLJ_DIR}/layerexdraw/shim/lllj_layerexdraw_prefix.h;-iquote;${LLLJ_DIR}/layerexdraw/shim")
+# textrender.dll (TextRenderBase: layout, per-character delays, key waits,
+# links, ruby) vendored from krkrsdl3 (textrender/UPSTREAM.txt). Its prefix
+# names the ncbind module and bridges krkrsdl3's UTF-8 ttstr to krkrz's UTF-16.
+file(GLOB LLLJ_TEXTRENDER_SRC CONFIGURE_DEPENDS ${LLLJ_DIR}/textrender/*.cpp)
+set_source_files_properties(${LLLJ_TEXTRENDER_SRC} DIRECTORY ${CMAKE_SOURCE_DIR}/src/core
+    PROPERTIES COMPILE_OPTIONS
+    "-include;${LLLJ_DIR}/textrender/shim/lllj_textrender_prefix.h")
 # PlutoVG (MIT + FreeType license): plain C, linked statically (PLUTOVG_BUILD_STATIC
 # only changes the visibility macros, which are empty on Linux).
 file(GLOB LLLJ_PLUTOVG_SRC CONFIGURE_DEPENDS ${LLLJ_DIR}/third_party/plutovg/source/*.c)
@@ -61,7 +68,7 @@ foreach(lib avformat avcodec avutil)
 endforeach()
 set(CMAKE_BUILD_RPATH ${CMAKE_BUILD_RPATH} "\$ORIGIN" PARENT_SCOPE)
 
-set(KRKRZ_SRC_ADD ${KRKRZ_SRC_ADD} ${LLLJ_SRC} ${LLLJ_EMOTE_SRC} ${LLLJ_LAYEREXDRAW_SRC}
+set(KRKRZ_SRC_ADD ${KRKRZ_SRC_ADD} ${LLLJ_SRC} ${LLLJ_EMOTE_SRC} ${LLLJ_LAYEREXDRAW_SRC} ${LLLJ_TEXTRENDER_SRC}
     ${LLLJ_PLUTOVG_SRC} ${LLLJ_DSPFILTERS_SRC} PARENT_SCOPE)
 set(KRKRZ_LIB_ADD ${KRKRZ_LIB_ADD} ${LLLJ_FFMPEG_LIBS} PARENT_SCOPE)
 set(KRKRZ_INC ${KRKRZ_INC} ${LLLJ_DIR}/src ${CMAKE_CURRENT_BINARY_DIR}

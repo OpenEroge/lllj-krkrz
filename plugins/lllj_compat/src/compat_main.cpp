@@ -94,13 +94,10 @@ iTJSDispatch2 *CreateLLLJNative(iTJSDispatch2 *global)
 
 static tTVPAtInstallClass TVPInstallLLLJNative(TJS_W("LLLJNative"), CreateLLLJNative, TJS_W(""));
 
-// ported native classes (krkr-ns): PSBFile, TextRenderBase
+// ported native classes (krkr-ns): PSBFile. TextRenderBase is the textrender/ plugin.
 #include "PsbFilePlugin.h"
-#include "TextRenderBase.h"
 static iTJSDispatch2 *LLLJCreatePSBFile(iTJSDispatch2 *) { return TVPCreateNativeClass_PSBFile(); }
-static iTJSDispatch2 *LLLJCreateTextRenderBase(iTJSDispatch2 *) { return TVPCreateNativeClass_TextRenderBase(); }
 static tTVPAtInstallClass TVPInstallLLLJPSBFile(TJS_W("PSBFile"), LLLJCreatePSBFile, TJS_W(""));
-static tTVPAtInstallClass TVPInstallLLLJTextRenderBase(TJS_W("TextRenderBase"), LLLJCreateTextRenderBase, TJS_W(""));
 
 // LLLJNative.log(msg): always-on important log line (game scripts nullify Debug.message)
 LLLJ_NATIVE(log)

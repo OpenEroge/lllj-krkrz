@@ -73,9 +73,9 @@ Alt+Enter 切换全屏；缩放和右键返回已回归。系统操作使用游�
   - `toml.cpp`：`Scripts.tomlDecodeFromStorage`（toml++）。
   - `PsbFilePlugin.cpp` / `PSBData.cpp`：`PSBFile` + `psb://` 存储（移植自 krkr-ns；补了 krkrz 的 `iTVPStorageMedia2`，内存流类改名避开与 krkrz 核心同名类的 ODR 冲突）。
   - `layerexdraw/` + `third_party/plutovg/`：layerExDraw（GDI+ 模拟，移植自 krkr-ns，PlutoVG 光栅化；PathGradient 按 GDI+ 三角扇语义重写），供流程图和颜色选择器使用。
+  - `textrender/`：`TextRenderBase`（textrender.dll：排版、逐字延迟、按键等待、链接、注音；移植自 krkrsdl3，按 Windows 原版实测修正，见 `textrender/UPSTREAM.txt`；`tools/textrender_compare.py` 在 Wine 原版与本移植上跑同一探针对比）。
   - `layer_extras.cpp`：`Layer.stitchWrappedCopy`（layerStwCopy，按原 DLL 反汇编实现，系统条纹转场）、`Layer.fetchImageSize`、`Storages.saveOctet`、`System.getKnownFolderPath`。
   - `msdfrender.cpp`：MSDF/SDF 图集字体（`makeGlyphMSDF/SDF`、`operateGlyphToProvince`、`makeBitmapFromProvince`、`getAscentHeight`，按原 DLL 反汇编实现）。
-  - `TextRenderBase.cpp`：消息排版（移植自 krkr-ns；字宽改为回调脚本的 `onFontChange/onGetTextWidth`，这样预渲染字体也能量）。
   - `compat_main.cpp`：`LLLJNative`（`log`、`attachMembers`：把 TJS 类成员挂到原生类上）。
   - `frame_stats.cpp` / `storage_stats.cpp`：呈现计数、计时快照、资源索引诊断。
   - `FFmpegMoviePlayer.cpp`：VideoOverlay 的 mp4/wmv/asf 后端（libavformat/libavcodec，结构仿 krkrz 的 `Mpeg1MoviePlayer`：

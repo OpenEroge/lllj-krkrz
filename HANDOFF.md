@@ -56,7 +56,7 @@ python3 -I tools/verify_windows_saves.py artifacts/win-01
 - **不是** krkrz_plugin 目标：`CMakeLists.txt` 通过 `PARENT_SCOPE` 把源码塞进引擎可执行文件（`KRKRZ_SRC_ADD`），所以能用引擎内部头文件
   （`tjsNative.h`、`LayerIntf.h`、`StorageIntf.h` …）。
 - **注册入口**：`compat_main.cpp` 里的 `tTVPAtInstallClass`（核心类装完后调用）。`LLLJNative` 对象在这里建好，然后执行嵌入的 `prelude.tjs`。
-  `PSBFile`、`TextRenderBase` 也在这里注册。
+  `PSBFile` 也在这里注册；`TextRenderBase` 是静态插件 `lllj_textrender`（`textrender/`，prelude 把 textrender.dll 映射过去）。
 - **加原生函数**：任意 `.cpp` 里写 `LLLJ_NATIVE(name) { ... }`（见 `lllj_compat.h`），在 TJS 里就是 `LLLJNative.name(...)`。
 - **加原生类成员到 Window/Layer 等**：在 prelude 里写一个 TJS 类，再 `LLLJNative.attachMembers(那个类, Window)`（ncbind 的 NCB_ATTACH_CLASS 同理）。
 - **DLL → 实现** 的映射全在 `prelude.tjs`：`LLLJ.realName`（→ 静态链接的 krkrz_dev 插件）和 `lllj_shim(...)`（→ TJS 替身）。
