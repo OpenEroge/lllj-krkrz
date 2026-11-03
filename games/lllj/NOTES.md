@@ -77,12 +77,25 @@
     测量脚本见 `tests/perf/README.md`（perf 在本环境不可用，改用 schedstat + gdb 抽样）。
 21. **内存池自锁**：`TVPPooledAllocator::allocate` 原来持锁调用内存压力回调，回调清存储缓存又进 `free()` → 同线程死锁（汉化字体进缓存时必现，表现为启动卡在字体许可证日志之后）。已改为释放锁后回调。
 22. **TJS 小坑**：`isvalid void` 为真（判断对象已释放要先看 `typeof`）；`Layer.getMainPixel` 不带 alpha。
+23. **性能批次（2026-11）**：
+    - 构建：引擎的内存统计（全局 new/delete 计数、内存浮层、周期 dump）默认不编入（`-DLLLJ_DEV_STATS=ON` 恢复）；Release 开 LTO；`tools/pgo.sh` 做 PGO。
+      全程 `-fno-strict-aliasing`：Kirikiri 代码到处是 `(iTJSNativeInstance**)&layer` 这种强转，PGO+LTO 下 `Layer` 构造会忽略父层（子层全被当成主层，启动即失败）。
+      LTO 还报出 json/csvParser/saveStruct 插件同名类的 ODR 冲突，已改为内部链接。
+    - PNG：vcpkg 的 zlib 换成 zlib-ng（覆盖端口），背景解码 36→27ms；剩下主要是 libpng 逐行反滤波（约 14ms），再快只能换解码器。
+      背景预读：`prelude/game.tjs` 在 `KAGEnvPlayer.play` 前看 30 行，把 stage/stage2/event 的 PNG（含 `_cn` 本地化版）交给引擎加载线程；
+      快进 30 秒内 35 次背景加载有 34 次已解码好（不预读时 16 次，全靠缓存复用）。
+    - E-mote：游戏链接的是 `motionplayer_nod3d.dll`，但 krkr-ns 的 `Player.useD3D` 让脚本走 D3D 路径（全屏共享 D3DAdaptor → `motionWorkLayer` → 每帧 `assignImages`），已去掉。
+      现在每个 motion 画到自己的层：GL 目标存 BGRA（着色器换 R/B），只读回/比较变化区域，GLES3 下经 PBO+fence 异步读回，下一轮主循环送进图层（晚一帧；`-emote_readback=sync` 关闭）。
+    - Xvfb 实测（改动前 → 仅 LTO → PGO+LTO）：设置界面每次开关主线程 CPU 790 → 733 → 724ms；背景 PNG 35.5 → 27 → 28ms；快进 20–22 句/s，差异在噪声内。
+      E-mote 每次 draw 的读回 2.8–8.0 → 0.5–2.1ms（llvmpipe，绝对值不代表真 GPU）。桌面帧率需要在桌面上重测。
+    - 测试：截图（PNG 压缩）变快后，movie 套件 seek 后立刻取样的"前进 1 秒"断言失效，已改为等播放恢复再取样；
+      emote 套件 `sd011a_t01a`「看起来静止」贴着阈值（历来 5 张里 2–5 张不同），偶发失败，重跑即过。
 
 ## 已知问题
 
 | 现象 | 归属批次 |
 |---|---|
-| eyecatch 在桌面平均约 70fps，但最长帧约 38ms（1080p 读回+转换、首次贴图上传）；无 GPU 时约 20fps | 未做（原批次 7 已取消） |
+| eyecatch 在桌面平均约 70fps，最长帧约 38ms：读回已改为异步、只处理变化区域（见 23），首次贴图上传仍在主线程；桌面帧率待重测 | 待桌面实测 |
 | 视频期间桌面最长呈现间隔 26–28ms（>25ms）；真实声卡下的音画同步尚待人工实听 | 未做（原批次 7 已取消） |
 | 延迟的 dry/wet 语义（按 STK 习惯交叉淡化）和混响电平尚未与 Wine 原版实听对比；多轨按各轨直接相加，部分素材（`rgb_live`）相加后超过 0dBFS | 批次 4 人工复核 |
 | 鉴赏音乐页频谱提示「fftgraph.dllがありません」：原版游戏目录里也没有 fftgraph.dll，行为与原版一致，未实现 | 不做 |
