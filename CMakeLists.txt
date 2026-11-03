@@ -31,6 +31,20 @@ set(KRKRZ_USE_ELEMENTS OFF CACHE BOOL "" FORCE)
 set(KRKRZ_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 option(KRKRZ_DRAW_STATS "collect DrawThreadPool usage stats (atomic counters)" ON)
 
+# The engine's memory instrumentation is on by default, but it is a dev tool:
+# with alloc stats every new/delete/TJS_malloc goes through one pool lock plus
+# a header check and atomic counters (about 12% of main-thread samples while
+# opening the settings screen), and the overlay keeps a sampler thread alive.
+# LLLJ_DEV_STATS=ON builds them back in. FORCE so existing build directories,
+# which cached the engine defaults, follow this switch.
+# Kept regardless: KRKRZ_ENABLE_ALLOCATOR_STATS (without it the file pool's
+# used() is SIZE_MAX, which disables the storage cache's back-pressure check),
+# KRKRZ_DRAW_STATS (the tests assert it) and the REPL (the tests drive it).
+option(LLLJ_DEV_STATS "build with memory instrumentation (alloc stats, overlay, periodic dump)" OFF)
+foreach(_stat KRKRZ_ENABLE_ALLOC_STATS KRKRZ_ENABLE_MEMORY_OVERLAY KRKRZ_ENABLE_PERIODIC_DUMP)
+    set(${_stat} ${LLLJ_DEV_STATS} CACHE BOOL "set from LLLJ_DEV_STATS" FORCE)
+endforeach()
+
 # vcpkg manifest: the engine's vcpkg.json merged with those of movie-player and
 # the plugins. Must run before project(), which starts the manifest install.
 include(${KRKRZ_CORE_DIR}/cmake/MergeVcpkgManifest.cmake)

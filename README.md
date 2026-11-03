@@ -47,6 +47,12 @@ games/lllj/setup.sh [../limelight/result]  # 用解包后的游戏数据生成�
 `./run.sh` 的参数原样传给引擎；`HEADLESS=1` 用私有 Xvfb + 无声运行，`REPLCH=目录` 打开 REPL 文件通道（`tools/dev/repl.sh`）。
 游戏相关的用法（语言切换、存档、回归测试）见 [games/lllj/README.md](games/lllj/README.md)。
 
+### 构建选项
+
+| 选项 | 默认 | 作用 |
+|---|---|---|
+| `-DLLLJ_DEV_STATS=ON` | OFF | 编入引擎的内存统计（全局 new/delete 计数与 Krkrz 池、内存浮层、周期 dump）。只用于查内存问题：它让每次分配都过一把池锁 |
+
 ## 目录
 
 | 路径 | 内容 |
