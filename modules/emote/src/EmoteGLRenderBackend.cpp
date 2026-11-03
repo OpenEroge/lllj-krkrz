@@ -2,11 +2,14 @@
 #include "EmoteGLRenderBackend.h"
 #include "KrkrNSLog.h"
 #include "KrkrNSProf.h"
+#include "Platform.h"
+#include "SysInitIntf.h"
 #include <SDL.h>
 #include <SDL_opengles2.h>
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <cstring>
 #include <stdexcept>
 #include <vector>
@@ -45,6 +48,7 @@ uniform float opa;
 uniform bool enableColor;
 uniform bool multiplyColor;
 uniform vec4 uniformColor;
+uniform bool swapRB;
 void main() {
     if (enableMask && texture2D(maskTexture, gl_FragCoord.xy / viewportSize).a < 0.5)
         discard;
@@ -56,7 +60,10 @@ void main() {
     if (multiplyColor) {
         color.rgb *= color.a;
     }
-    gl_FragColor = color;
+    // Render targets hold BGRA, the Kirikiri layer byte order, so the layer
+    // copy is a plain compare-and-copy; set when the sampled image's order
+    // differs from the target's. Blending is per channel, so this is exact.
+    gl_FragColor = swapRB ? color.bgra : color;
 }
 )";
 
@@ -91,41 +98,102 @@ void main() {
     X(PFNGLCLEARCOLORPROC, ClearColor) X(PFNGLCLEARPROC, Clear) \
     X(PFNGLPIXELSTOREIPROC, PixelStorei) X(PFNGLREADPIXELSPROC, ReadPixels) X(PFNGLFLUSHPROC, Flush) \
     X(PFNGLGETINTEGERVPROC, GetIntegerv) X(PFNGLISENABLEDPROC, IsEnabled)
+
+// OpenGL ES 3.0 entry points for the asynchronous readback (pixel pack buffer
+// + fence). Optional: without them readback stays synchronous. The SDL GLES2
+// headers have no ES3 prototypes, hence the local types.
+typedef void* (GL_APIENTRY* EmotePFNMapBufferRange)(GLenum, GLintptr, GLsizeiptr, GLbitfield);
+typedef GLboolean (GL_APIENTRY* EmotePFNUnmapBuffer)(GLenum);
+typedef GLsync (GL_APIENTRY* EmotePFNFenceSync)(GLenum, GLbitfield);
+typedef GLenum (GL_APIENTRY* EmotePFNClientWaitSync)(GLsync, GLbitfield, GLuint64);
+typedef void (GL_APIENTRY* EmotePFNDeleteSync)(GLsync);
+#define EMOTE_GL_ES3_FUNCTIONS(X) \
+    X(EmotePFNMapBufferRange, MapBufferRange) X(EmotePFNUnmapBuffer, UnmapBuffer) \
+    X(EmotePFNFenceSync, FenceSync) X(EmotePFNClientWaitSync, ClientWaitSync) \
+    X(EmotePFNDeleteSync, DeleteSync)
+constexpr GLenum kPixelPackBuffer = 0x88EB;       // GL_PIXEL_PACK_BUFFER
+constexpr GLenum kStreamRead = 0x88E1;            // GL_STREAM_READ
+constexpr GLbitfield kMapReadBit = 0x0001;        // GL_MAP_READ_BIT
+constexpr GLenum kSyncGpuCommandsComplete = 0x9117;
+constexpr GLbitfield kSyncFlushCommandsBit = 0x0001;
+constexpr GLenum kTimeoutExpired = 0x911B, kWaitFailed = 0x911D;
 }
 
 struct EmoteGLRenderBackend::Impl
 {
 #define DECLARE_GL(type, name) type name = nullptr;
     EMOTE_GL_FUNCTIONS(DECLARE_GL)
+    EMOTE_GL_ES3_FUNCTIONS(DECLARE_GL)
 #undef DECLARE_GL
+    // Readback through a pixel pack buffer + fence (RequestReadback). Needs
+    // OpenGL ES 3.0; -emote_readback=sync keeps every readback synchronous.
+    bool asyncReadback = false;
+    // Axis-aligned pixel rectangle [x0,x1) x [y0,y1); empty when x0 >= x1.
+    struct Rect
+    {
+        int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+        bool empty() const { return x0 >= x1 || y0 >= y1; }
+        void add(const Rect& r)
+        {
+            if (r.empty()) return;
+            if (empty()) { *this = r; return; }
+            x0 = std::min(x0, r.x0); y0 = std::min(y0, r.y0);
+            x1 = std::max(x1, r.x1); y1 = std::max(y1, r.y1);
+        }
+        void clip(int w, int h)
+        {
+            x0 = std::max(x0, 0); y0 = std::max(y0, 0);
+            x1 = std::min(x1, w); y1 = std::min(y1, h);
+        }
+    };
     struct Image
     {
         int width, height;
         bool target;
+        // Targets made through CreateTarget store BGRA (the shader swaps on
+        // write); textures and the self-test's target store RGBA.
+        bool bgra = false;
         GLuint texture = 0, fbo = 0;
+        // CPU mirror of a target, as LockTarget returns it.
         std::vector<uint8_t> pixels;
-        // Region of this render target touched since the last LockTarget.
+        // Region of this render target touched since the last readback.
         // Readback only needs these pixels: the CPU mirror keeps the rest from
         // the previous frame, and the mesh vertices are the only writers.
-        // A clear wipes the target, so the mirror is zeroed on the next
-        // readback instead of being re-read from the GPU.
-        int dirtyX0 = 0, dirtyY0 = 0, dirtyX1 = 0, dirtyY1 = 0;
-        bool dirtyValid = false;
+        Rect dirty;
+        // A clear wipes the target; the mirror is zeroed on the next readback
+        // instead of being re-read from the GPU, and only where it can hold
+        // anything: content, the union of everything read back since the
+        // previous clear.
         bool cleared = false;
-        void markDirty(int x0, int y0, int x1, int y1)
+        Rect content;
+        // Mirror pixels changed since the last TakeChangedRect.
+        Rect changed;
+        // Asynchronous readback in flight: the dirty rectangle being copied
+        // into the pixel pack buffer (tight rows) and whether the frame began
+        // with a clear. The clear is applied when it completes, before the copy.
+        GLuint pbo = 0;
+        size_t pboSize = 0;
+        GLsync fence = nullptr;
+        bool pending = false, pendingCleared = false;
+        Rect pendingRect;
+        void markDirty(int x0, int y0, int x1, int y1) { dirty.add(Rect{x0, y0, x1, y1}); }
+        // Mirror updates, in frame order: the clear first, then what was read.
+        void applyClear()
         {
-            if (x0 >= x1 || y0 >= y1) return;
-            if (!dirtyValid) { dirtyX0 = x0; dirtyY0 = y0; dirtyX1 = x1; dirtyY1 = y1; dirtyValid = true; return; }
-            if (x0 < dirtyX0) dirtyX0 = x0;
-            if (y0 < dirtyY0) dirtyY0 = y0;
-            if (x1 > dirtyX1) dirtyX1 = x1;
-            if (y1 > dirtyY1) dirtyY1 = y1;
+            Rect r = content;
+            r.clip(width, height);
+            for (int y = r.y0; y < r.y1; ++y)
+                std::memset(pixels.data() + (size_t(y) * width + r.x0) * 4, 0, size_t(r.x1 - r.x0) * 4);
+            changed.add(r);
+            content = Rect{};
         }
-        void clearDirty()
+        void applyRows(const Rect& r, const uint8_t* rows, size_t rowBytes)
         {
-            dirtyValid = false;
-            cleared = false;
-            dirtyX0 = dirtyY0 = dirtyX1 = dirtyY1 = 0;
+            for (int y = r.y0; y < r.y1; ++y)
+                std::memcpy(pixels.data() + (size_t(y) * width + r.x0) * 4,
+                            rows + size_t(y - r.y0) * rowBytes, size_t(r.x1 - r.x0) * 4);
+            changed.add(r);
+            content.add(r);
         }
     };
     std::vector<std::unique_ptr<Image>> images;
@@ -134,7 +202,7 @@ struct EmoteGLRenderBackend::Impl
     SDL_Window* savedWindow = nullptr;
     bool active = false, failed = false;
     GLuint program = 0, vbo = 0, ibo = 0;
-    GLint textureLoc, maskLoc, enableMaskLoc, viewportLoc, opacityLoc, colorEnabledLoc, multiplyColorLoc, colorLoc;
+    GLint textureLoc, maskLoc, enableMaskLoc, viewportLoc, opacityLoc, colorEnabledLoc, multiplyColorLoc, colorLoc, swapLoc;
     Image* target = nullptr;
     Image* mask = nullptr;
     int blend = 0;
@@ -258,8 +326,20 @@ struct EmoteGLRenderBackend::Impl
 #define LOAD_GL(type, name) name = reinterpret_cast<type>(SDL_GL_GetProcAddress("gl" #name)); if (!name) throw std::runtime_error("Missing gl" #name);
             EMOTE_GL_FUNCTIONS(LOAD_GL)
 #undef LOAD_GL
+#define LOAD_GL_OPTIONAL(type, name) name = reinterpret_cast<type>(SDL_GL_GetProcAddress("gl" #name));
+            EMOTE_GL_ES3_FUNCTIONS(LOAD_GL_OPTIONAL)
+#undef LOAD_GL_OPTIONAL
             const char* version = reinterpret_cast<const char*>(GetString(GL_VERSION));
             const char* extensions = reinterpret_cast<const char*>(GetString(GL_EXTENSIONS));
+            {
+                int esMajor = 0;
+                if (version) std::sscanf(version, "OpenGL ES %d", &esMajor);
+                tTJSVariant opt;
+                const bool forceSync = TVPGetCommandLine(TJS_W("-emote_readback"), &opt) &&
+                                       ttstr(opt) == TJS_W("sync");
+                asyncReadback = esMajor >= 3 && MapBufferRange && UnmapBuffer && FenceSync &&
+                                ClientWaitSync && DeleteSync && !forceSync;
+            }
             if (version && std::strstr(version, "OpenGL ES 2.") &&
                 (!extensions || !std::strstr(extensions, "GL_EXT_blend_minmax")))
                 throw std::runtime_error("E-mote requires GL_EXT_blend_minmax");
@@ -282,10 +362,12 @@ struct EmoteGLRenderBackend::Impl
             colorEnabledLoc = GetUniformLocation(program, "enableColor");
             multiplyColorLoc = GetUniformLocation(program, "multiplyColor");
             colorLoc = GetUniformLocation(program, "uniformColor");
+            swapLoc = GetUniformLocation(program, "swapRB");
             GenBuffers(1, &vbo); GenBuffers(1, &ibo);
             Disable(GL_DEPTH_TEST); Disable(GL_SCISSOR_TEST); Disable(GL_CULL_FACE);
             Enable(GL_BLEND);
             KRKRNS_LOG("[emote] isolated GL mesh backend ready: %s", version);
+            TVPConsoleLog("emote GL readback: %s", asyncReadback ? "async (pixel pack buffer)" : "sync");
             return true;
         }
         catch (const std::exception& error)
@@ -329,38 +411,35 @@ struct EmoteGLRenderBackend::Impl
         // transparent), so it zeroes the mirror instead of forcing a full read.
         if (!clearBeforeRead)
         {
+            if (destination != image->pixels.data())
+                throw std::runtime_error("E-mote incremental readback must target the mirror");
             if (image->cleared)
-                std::memset(destination, 0, rowBytes * size_t(image->height));
-            if (!image->dirtyValid)
+                image->applyClear();
+            image->cleared = false;
+            Rect r = image->dirty;
+            image->dirty = Rect{};
+            r.clip(image->width, image->height);
+            if (r.empty())
                 return; // nothing was drawn: the mirror is already correct
-            const int x0 = std::max(0, image->dirtyX0);
-            const int y0 = std::max(0, image->dirtyY0);
-            const int x1 = std::min(image->width, image->dirtyX1);
-            const int y1 = std::min(image->height, image->dirtyY1);
-            if (x0 >= x1 || y0 >= y1) return;
-            const int w = x1 - x0;
-            const int h = y1 - y0;
-            const size_t scratchRow = size_t(w) * 4;
+            const int w = r.x1 - r.x0;
+            const int h = r.y1 - r.y0;
             if (tileWidth <= 0 || tileWidth >= w)
             {
+                const size_t scratchRow = size_t(w) * 4;
                 readScratch.resize(scratchRow * size_t(h));
-                ReadPixels(x0, y0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, readScratch.data());
-                for (int r = 0; r < h; ++r)
-                    std::memcpy(destination + size_t(y0 + r) * rowBytes + size_t(x0) * 4,
-                                readScratch.data() + size_t(r) * scratchRow, scratchRow);
+                ReadPixels(r.x0, r.y0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, readScratch.data());
+                image->applyRows(r, readScratch.data(), scratchRow);
                 return;
             }
             // Tiled readback (compatibility renderers that cap a single
             // readback row): read one tight tile at a time and scatter it.
-            for (int tx = x0; tx < x1; tx += tileWidth)
+            for (int tx = r.x0; tx < r.x1; tx += tileWidth)
             {
-                const int tw = std::min(tileWidth, x1 - tx);
-                const size_t tileRow = size_t(tw) * 4;
+                const Rect tr{tx, r.y0, std::min(tx + tileWidth, r.x1), r.y1};
+                const size_t tileRow = size_t(tr.x1 - tr.x0) * 4;
                 std::vector<uint8_t> tile(tileRow * size_t(h));
-                ReadPixels(tx, y0, tw, h, GL_RGBA, GL_UNSIGNED_BYTE, tile.data());
-                for (int r = 0; r < h; ++r)
-                    std::memcpy(destination + size_t(y0 + r) * rowBytes + size_t(tx) * 4,
-                                tile.data() + size_t(r) * tileRow, tileRow);
+                ReadPixels(tr.x0, tr.y0, tr.x1 - tr.x0, h, GL_RGBA, GL_UNSIGNED_BYTE, tile.data());
+                image->applyRows(tr, tile.data(), tileRow);
             }
             return;
         }
@@ -427,12 +506,81 @@ struct EmoteGLRenderBackend::Impl
         auto* image = find(handle);
         if (!image) return;
         Scope scope(*this);
+        if (image->fence) DeleteSync(image->fence);
+        if (image->pbo) DeleteBuffers(1, &image->pbo);
         if (image->fbo) DeleteFramebuffers(1, &image->fbo);
         DeleteTextures(1, &image->texture);
         if (target == image) target = nullptr;
         if (mask == image) mask = nullptr;
         images.erase(std::remove_if(images.begin(), images.end(),
             [image](const std::unique_ptr<Image>& item) { return item.get() == image; }), images.end());
+    }
+    // Start copying the dirty rectangle into the image's pixel pack buffer.
+    // A readback still in flight is finished first, so frames stay in order.
+    void requestReadback(Image* image)
+    {
+        completeReadback(image, true);
+        bind(image);
+        image->pendingCleared = image->cleared;
+        image->cleared = false;
+        Rect r = image->dirty;
+        image->dirty = Rect{};
+        r.clip(image->width, image->height);
+        image->pendingRect = r;
+        image->pending = image->pendingCleared || !r.empty();
+        if (r.empty()) return;
+        const size_t bytes = size_t(r.x1 - r.x0) * 4 * size_t(r.y1 - r.y0);
+        if (!image->pbo) GenBuffers(1, &image->pbo);
+        BindBuffer(kPixelPackBuffer, image->pbo);
+        if (image->pboSize < bytes)
+        {
+            BufferData(kPixelPackBuffer, GLsizeiptr(bytes), nullptr, kStreamRead);
+            image->pboSize = bytes;
+        }
+        PixelStorei(GL_PACK_ALIGNMENT, 1);
+        ReadPixels(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        BindBuffer(kPixelPackBuffer, 0);
+        image->fence = FenceSync(kSyncGpuCommandsComplete, 0);
+    }
+    // Apply a finished readback to the mirror: the frame's clear, then the
+    // copied rows. false: not finished yet (only when wait is false).
+    bool completeReadback(Image* image, bool wait)
+    {
+        if (!image->pending) return true;
+        if (image->fence)
+        {
+            const GLenum status = ClientWaitSync(image->fence, wait ? kSyncFlushCommandsBit : 0,
+                                                 wait ? GLuint64(5000000000ull) : 0);
+            if (status == kTimeoutExpired && !wait) return false;
+            if (status == kWaitFailed || status == kTimeoutExpired)
+                KRKRNS_LOG("[emote] readback fence wait failed (0x%x)", status);
+            DeleteSync(image->fence);
+            image->fence = nullptr;
+        }
+        image->pending = false;
+        if (image->pendingCleared) image->applyClear();
+        const Rect& r = image->pendingRect;
+        if (r.empty()) return true;
+        const size_t rowBytes = size_t(r.x1 - r.x0) * 4;
+        BindBuffer(kPixelPackBuffer, image->pbo);
+        const void* mapped = MapBufferRange(kPixelPackBuffer, 0, GLsizeiptr(rowBytes * size_t(r.y1 - r.y0)), kMapReadBit);
+        if (mapped)
+        {
+            image->applyRows(r, static_cast<const uint8_t*>(mapped), rowBytes);
+            UnmapBuffer(kPixelPackBuffer);
+        }
+        else
+        {
+            // Mapping failed: fall back to reading the (still intact) target.
+            BindBuffer(kPixelPackBuffer, 0);
+            bind(image);
+            readScratch.resize(rowBytes * size_t(r.y1 - r.y0));
+            PixelStorei(GL_PACK_ALIGNMENT, 1);
+            ReadPixels(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0, GL_RGBA, GL_UNSIGNED_BYTE, readScratch.data());
+            image->applyRows(r, readScratch.data(), rowBytes);
+        }
+        BindBuffer(kPixelPackBuffer, 0);
+        return true;
     }
     void update(void* handle, const uint8_t* pixels, int width, int height, int pitch)
     {
@@ -442,6 +590,16 @@ struct EmoteGLRenderBackend::Impl
             (stride < std::ptrdiff_t(width) * 4 && stride > -std::ptrdiff_t(width) * 4))
             throw std::runtime_error("Invalid E-mote texture update dimensions/pitch");
         Scope scope(*this);
+        if (image->target)
+        {
+            // Pixels must be in the target's byte order (BGRA for CreateTarget
+            // targets). The upload replaces the mirror, so finish a readback
+            // first and record the region for the clear and the layer copy.
+            completeReadback(image, true);
+            const Rect r{0, 0, width, height};
+            image->content.add(r);
+            image->changed.add(r);
+        }
         for (int y = 0; y < height; ++y)
             std::memcpy(image->pixels.data() + size_t(y) * image->width * 4,
                         pixels + std::ptrdiff_t(y) * stride, size_t(width) * 4);
@@ -504,6 +662,8 @@ bool EmoteGLRenderBackend::selfTest()
         KRKRNS_LOG("[emote] GL probe FAIL: probe resources");
         return false;
     }
+    // The probe checks the R byte, so keep this target in RGBA order.
+    impl->find(target)->bgra = false;
     const uint8_t red[4] = {255, 0, 0, 255};
     UpdateTexture(tex, red, 1, 1, 4);
     SetTarget(target);
@@ -589,7 +749,12 @@ bool EmoteGLRenderBackend::selfTest()
                rend ? rend : "?", ver ? ver : "?");
     return ok;
 }
-void* EmoteGLRenderBackend::CreateTarget(int w, int h) { return impl->create(w, h, true); }
+void* EmoteGLRenderBackend::CreateTarget(int w, int h)
+{
+    auto* image = static_cast<Impl::Image*>(impl->create(w, h, true));
+    if (image) image->bgra = true; // Kirikiri layer byte order; see the fragment shader
+    return image;
+}
 bool EmoteGLRenderBackend::GetTargetSize(void* target, int& width, int& height) const
 {
     auto* image = impl->find(target);
@@ -616,7 +781,7 @@ void EmoteGLRenderBackend::ClearTarget(bool clear)
         // The whole target was wiped. The CPU mirror is zeroed on the next
         // readback instead of re-reading the cleared FBO from the GPU.
         impl->target->cleared = true;
-        impl->target->dirtyValid = false;
+        impl->target->dirty = Impl::Rect{};
     }
 }
 uint8_t* EmoteGLRenderBackend::LockTarget(void* handle, int& pitch)
@@ -625,6 +790,8 @@ uint8_t* EmoteGLRenderBackend::LockTarget(void* handle, int& pitch)
     if (!target || !target->target) return nullptr;
     impl->bind(target);
     pitch = target->width * 4;
+    // An asynchronous readback still in flight belongs before this one.
+    impl->completeReadback(target, true);
     {
         // GPU->CPU readback is the E-mote frame's biggest single cost; timed
         // separately from the RGBA->BGRA convert that follows in the layer
@@ -636,12 +803,47 @@ uint8_t* EmoteGLRenderBackend::LockTarget(void* handle, int& pitch)
             (double)(SDL_GetPerformanceCounter() - t0) * 1000.0 /
             (double)SDL_GetPerformanceFrequency());
     }
-    target->clearDirty();
     // Preserve the upstream framebuffer's RGBA/alpha equations exactly.
     // Row 0 maps to logical row 0 of E-mote's clip-space mesh at the Layer bridge.
     return target->pixels.data();
 }
 void EmoteGLRenderBackend::UnlockTarget(void*) { impl->end(); }
+bool EmoteGLRenderBackend::TargetIsBGRA(void* target) const
+{
+    auto* image = impl->find(target);
+    return image && image->bgra;
+}
+bool EmoteGLRenderBackend::TakeChangedRect(void* target, int& x0, int& y0, int& x1, int& y1)
+{
+    auto* image = impl->find(target);
+    if (!image || !image->target) return false;
+    x0 = image->changed.x0; y0 = image->changed.y0;
+    x1 = image->changed.x1; y1 = image->changed.y1;
+    image->changed = Impl::Rect{};
+    return true;
+}
+bool EmoteGLRenderBackend::RequestReadback(void* handle)
+{
+    auto* target = impl->find(handle);
+    if (!target || !target->target || !impl->asyncReadback || impl->readTileWidth > 0) return false;
+    const Uint64 t0 = SDL_GetPerformanceCounter();
+    Impl::Scope scope(*impl);
+    impl->requestReadback(target);
+    krkrsdl2_prof_emote_lock(
+        (double)(SDL_GetPerformanceCounter() - t0) * 1000.0 /
+        (double)SDL_GetPerformanceFrequency());
+    return true;
+}
+bool EmoteGLRenderBackend::CompleteReadback(void* handle, bool wait)
+{
+    auto* target = impl->find(handle);
+    if (!target || !target->pending) return true;
+    const bool owner = !impl->active;
+    if (owner && !impl->begin()) return false; // no GL context right now; retried later
+    const bool done = impl->completeReadback(target, wait);
+    if (owner) impl->end();
+    return done;
+}
 void* EmoteGLRenderBackend::GetTargetTexture(void* target) { return impl->find(target); }
 void EmoteGLRenderBackend::UpdateTargetTexture(void* t, const uint8_t* p, int w, int h, int pitch) { impl->update(t, p, w, h, pitch); }
 void EmoteGLRenderBackend::UpdateTexture(void* t, const uint8_t* p, int w, int h, int pitch) { impl->update(t, p, w, h, pitch); }
@@ -754,6 +956,7 @@ void EmoteGLRenderBackend::DrawMesh(const float* vertices, int count, const uint
     gl.Uniform1i(gl.colorEnabledLoc, gl.blend == 21);
     gl.Uniform1i(gl.multiplyColorLoc, gl.blend == 19);
     gl.Uniform4fv(gl.colorLoc, 1, gl.color);
+    gl.Uniform1i(gl.swapLoc, gl.target->bgra != image->bgra);
     switch (gl.blend)
     {
     case 19:

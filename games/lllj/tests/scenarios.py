@@ -169,6 +169,8 @@ KNOWN_CAUGHT = {
         "SaveSnapshotWatermark image proxy before world_object exists; MakeImageDataProxy.get catches that and keeps the name",
     ("anonymous", "uiLanguageType", "5"): "Chinese patch: its SystemConfig.uiLanguageType getter is read while kag is being "
         "constructed; the getter wraps global.kag in try/catch and returns 0",
+    ("affinesourcemotion.tjs", "global", "27"): "E-mote: the script reads Motion.Player.useD3D in try/catch to choose the D3D "
+        "motion path; motionplayer_nod3d.dll (and this port) has no such member, so Motion.enableD3D becomes false",
 }
 # Information dialogs that are part of the game: the Chinese patch's anti-resale notice at every start.
 KNOWN_DIALOGS = ("本补丁为免费分享、无任何要求即可获取，谨防上当受骗；",)
@@ -184,7 +186,7 @@ def check_log(path):
     import re
     text = Path(path).read_text(errors="replace")
     matches = [(re.sub(r"@0x[0-9a-f]+$", "", m[1]), m[2], m[3]) for m in re.finditer(
-        r"exception occured at ([^(]+)\(\d+\)\[\((?:function|property getter|property setter)\) ([^\]]+)\], VM ip = (\d+)", text)]
+        r"exception occured at ([^(]+)\(\d+\)\[\((?:function|property getter|property setter|top level script)\) ([^\]]+)\], VM ip = (\d+)", text)]
     known = sorted({m for m in matches if m in KNOWN_CAUGHT})
     unknown = [m for m in matches if m not in KNOWN_CAUGHT]
     # Also reject fatal errors and exception headers the parser did not recognize.

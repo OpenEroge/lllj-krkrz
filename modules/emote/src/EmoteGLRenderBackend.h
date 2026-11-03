@@ -19,6 +19,10 @@ public:
     void ClearTarget(bool clearColor) override;
     uint8_t* LockTarget(void* target, int& pitch) override;
     void UnlockTarget(void* target) override;
+    bool TargetIsBGRA(void* target) const override;
+    bool TakeChangedRect(void* target, int& x0, int& y0, int& x1, int& y1) override;
+    bool RequestReadback(void* target) override;
+    bool CompleteReadback(void* target, bool wait) override;
     void* GetTargetTexture(void* target) override;
     void UpdateTargetTexture(void* target, const uint8_t* pixels, int width, int height, int pitch) override;
     void* CreateTexture(int width, int height) override;

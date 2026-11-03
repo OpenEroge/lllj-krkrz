@@ -62,6 +62,21 @@ Local changes to upstream files (search for "PORT")
         frame comes from a variable; the clock drives embedded motions)
       - dropped the "skipToSync TODO" / "stop TODO" log lines: both methods
         are implemented, the messages were stale
+      - the layer copy takes BGRA targets as they are (SSE2 compare-and-copy),
+        visits only the backend's changed rectangle while EmoteLayerSync says
+        the adaptor's layer is unchanged, and fills adaptor layers from an
+        asynchronous readback at the start of the next iteration
+        (RequestLayerCopy / dispatch hook)
+  emoteplayer.cpp
+      - Player.useD3D is not registered. krkr-ns exposes it so that scripts
+        take the D3D motion path; the game links motionplayer_nod3d.dll,
+        which has no such member, and its scripts then use one
+        SeparateLayerAdaptor per motion (the async readback applies there)
+  EmoteGLRenderBackend.cpp  (readback)
+      - targets are BGRA (fragment shader swapRB), the probe's stays RGBA
+      - a clear zeroes only what was read back since the previous clear
+      - TakeChangedRect / RequestReadback / CompleteReadback: pixel pack
+        buffer + fence on OpenGL ES 3; -emote_readback=sync turns it off
 
 Known upstream gaps (still stubs). They only apply to E-mote character files
 (storage type "emote", PSB with metadata); this title ships none, so the

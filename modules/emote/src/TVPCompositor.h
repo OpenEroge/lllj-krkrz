@@ -19,6 +19,21 @@ public:
     virtual void ClearTarget(bool clearColor) = 0;
     virtual uint8_t* LockTarget(void* target, int& pitch) = 0;
     virtual void UnlockTarget(void* target) = 0;
+    // Byte order of the pixels LockTarget returns: false RGBA, true BGRA (the
+    // Kirikiri layer order, so the layer copy needs no channel swap).
+    virtual bool TargetIsBGRA(void* target) const { return false; }
+    // The part of the locked pixels that changed since the previous call, as
+    // [x0,x1) x [y0,y1); x0 >= x1 means nothing changed. Resets the record.
+    // false: not tracked, every pixel may have changed.
+    virtual bool TakeChangedRect(void* target, int& x0, int& y0, int& x1, int& y1) { return false; }
+    // Asynchronous readback. RequestReadback starts copying what was drawn
+    // into the target since the last readback to the CPU and returns true;
+    // false means it is not supported and LockTarget must be used.
+    // CompleteReadback finishes it into the pixels LockTarget returns (after
+    // which LockTarget reads nothing new) and returns true, or returns false
+    // when wait is false and the GPU is not done yet. Nothing pending: true.
+    virtual bool RequestReadback(void* target) { return false; }
+    virtual bool CompleteReadback(void* target, bool wait) { return true; }
     virtual void* GetTargetTexture(void* target) = 0;
     virtual void UpdateTargetTexture(void* target, const uint8_t* pixels,
                                      int width, int height, int pitch) = 0;

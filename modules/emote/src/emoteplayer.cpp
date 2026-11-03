@@ -160,7 +160,6 @@ NCB_REGISTER_SUBCLASS(Player)
     PROPERTY(chara);
     PROPERTY(variableKeys);
     PROPERTY(tags);
-    PROPERTY(useD3D); // 脚本侧判断 D3D emote 可用性（见 AffineSourceMotion）
 }
 
 NCB_REGISTER_CLASS(Motion)

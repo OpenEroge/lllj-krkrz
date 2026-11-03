@@ -12,7 +12,7 @@
 | [win32](../modules/win32/README.md) | windowEx、win32dialog、menu、getLangName 等 Windows 专属 DLL/API | `WIN32Dialog`、`MenuItem`、`Window` 成员 | — |
 | [packinone](../modules/packinone/README.md) | PackinOne.dll | `Scripts.loadDataPack/saveDataPack/…`，`Layer.fetchImageSize`，`Storages.saveOctet`，`System.getKnownFolderPath`；`compat/packinone.h`（`HxFilename`） | — |
 | [toml](../modules/toml/README.md) | toml.dll | `Scripts.tomlDecodeFromStorage` | — |
-| [emote](../modules/emote/README.md) | motionplayer.dll、psbfile.dll | `Motion.*`、`PSBFile`，`CompatNative.emoteStats()` | `-emote=cpu\|gl` |
+| [emote](../modules/emote/README.md) | motionplayer.dll、psbfile.dll | `Motion.*`、`PSBFile`，`CompatNative.emoteStats()` | `-emote=cpu\|gl`、`-emote_readback=sync` |
 | [layerexdraw](../modules/layerexdraw/README.md) | layerExDraw.dll（GDI+） | `GdiPlus`、`Layer` 绘图成员 | — |
 | [textrender](../modules/textrender/README.md) | textrender.dll | `TextRenderBase` | — |
 | [msdfrender](../modules/msdfrender/README.md) | msdfrender.dll | `Layer.makeGlyphMSDF/SDF…` | — |

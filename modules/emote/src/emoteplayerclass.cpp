@@ -15,9 +15,14 @@
 #ifdef __SWITCH__
 #include <arm_neon.h>
 #endif
+#if defined(__SSE2__)
+#include <emmintrin.h>
+#endif
 
 #include "tjsCommHead.h"
 #include "LayerIntf.h"
+#include "EngineHooks.h"
+#include "compat/compat.h"
 #include "KrkrNSProf.h"
 #include <SDL.h>
 
@@ -60,12 +65,57 @@ static ttstr EmoteFromUtf8(const std::string& value)
 // logical top row while GetMainImagePixelBufferPitch() is negative.  Copying
 // the whole render target forward from that pointer corrupts the guard area
 // preceding the bitmap.  Always copy logical rows using both signed pitches.
+// Compare-and-copy one row of pixels already in layer byte order (BGRA).
+// Writes only pixels that differ; returns the changed span [left, right) in
+// *left/*right (left >= right when nothing changed).
+static void CopyChangedBGRARow(std::uint32_t* destination, const std::uint32_t* source,
+                               int count, int* left, int* right)
+{
+    int l = count, r = 0, x = 0;
+#if defined(__SSE2__)
+    for (; x + 4 <= count; x += 4)
+    {
+        const __m128i s = _mm_loadu_si128(reinterpret_cast<const __m128i*>(source + x));
+        const __m128i d = _mm_loadu_si128(reinterpret_cast<const __m128i*>(destination + x));
+        const int differ = ~_mm_movemask_ps(_mm_castsi128_ps(_mm_cmpeq_epi32(s, d))) & 0xf;
+        if (differ)
+        {
+            _mm_storeu_si128(reinterpret_cast<__m128i*>(destination + x), s);
+            if (l == count) l = x + __builtin_ctz(differ);
+            r = x + 32 - __builtin_clz(static_cast<unsigned>(differ));
+        }
+    }
+#endif
+    for (; x < count; ++x)
+    {
+        if (destination[x] != source[x])
+        {
+            destination[x] = source[x];
+            if (l == count) l = x;
+            r = x + 1;
+        }
+    }
+    *left = l;
+    *right = r;
+}
+
+// A Kirikiri layer bitmap is commonly bottom-up: scan line 0 points at the
+// logical top row while GetMainImagePixelBufferPitch() is negative.  Copying
+// the whole render target forward from that pointer corrupts the guard area
+// preceding the bitmap.  Always copy logical rows using both signed pitches.
+//
+// sync (optional) records what was copied. While it still describes this
+// target, layer and pixel buffer, the layer already equals the target's CPU
+// pixels outside the backend's changed rectangle, so only that rectangle is
+// visited; otherwise (first copy, resize, a new or unshared bitmap, a backend
+// that does not track changes) the whole target is compared.
 static bool CopyRenderTargetToLayer(krkrsdl3::iTVPRenderBackend* renderer,
                                     void* target,
                                     tTJSNI_BaseLayer* layer,
                                     int sourceWidth,
                                     int sourceHeight,
-                                    tTVPRect* dirtyRect)
+                                    tTVPRect* dirtyRect,
+                                    EmoteLayerSync* sync = nullptr)
 {
     EmoteProfTimer profTimer(krkrsdl2_prof_emote_readback);
     (void)profTimer;
@@ -141,84 +191,124 @@ static bool CopyRenderTargetToLayer(krkrsdl3::iTVPRenderBackend* renderer,
             }
         }
         #endif
+        // Region to visit: the changed rectangle when the layer is in sync.
+        int changedX0 = 0, changedY0 = 0, changedX1 = 0, changedY1 = 0;
+        const bool tracked = renderer->TakeChangedRect(target, changedX0, changedY0, changedX1, changedY1);
+        const bool inSync = sync && tracked && sync->target == target && sync->layer == layer &&
+                            sync->buffer == destination && sync->pitch == destinationPitch &&
+                            sync->width == copyWidth && sync->height == copyHeight;
+        int regionX0 = 0, regionY0 = 0, regionX1 = copyWidth, regionY1 = copyHeight;
+        if (inSync)
+        {
+            regionX0 = std::max(changedX0, 0);
+            regionY0 = std::max(changedY0, 0);
+            regionX1 = std::min(changedX1, copyWidth);
+            regionY1 = std::min(changedY1, copyHeight);
+            if (regionX0 >= regionX1 || regionY0 >= regionY1)
+                regionX0 = regionX1 = regionY0 = regionY1 = 0;
+        }
+        if (sync)
+        {
+            sync->target = target;
+            sync->layer = layer;
+            sync->buffer = destination;
+            sync->pitch = destinationPitch;
+            sync->width = copyWidth;
+            sync->height = copyHeight;
+        }
+        const bool sourceIsBGRA = renderer->TargetIsBGRA(target);
         int dirtyLeft = copyWidth;
         int dirtyTop = copyHeight;
         int dirtyRight = 0;
         int dirtyBottom = 0;
         const Uint64 cvtStart = SDL_GetPerformanceCounter();
-        for (int y = 0; y < copyHeight; ++y)
+        const int regionWidth = regionX1 - regionX0;
+        for (int y = regionY0; y < regionY1; ++y)
         {
             uint8_t* destinationRow =
-                destination + static_cast<std::ptrdiff_t>(y) * destinationStride;
+                destination + static_cast<std::ptrdiff_t>(y) * destinationStride +
+                static_cast<std::ptrdiff_t>(regionX0) * 4;
             const uint8_t* sourceRow =
-                source + static_cast<std::ptrdiff_t>(y) * sourceStride;
-            // The E-mote backend is RGBA, while a 32-bpp Kirikiri Layer is
-            // BGRA in memory.  Preserve G/A and exchange R/B at the boundary.
+                source + static_cast<std::ptrdiff_t>(y) * sourceStride +
+                static_cast<std::ptrdiff_t>(regionX0) * 4;
             // Compare against the previous layer at the same time so Kirikiri
             // only recomposes the pixels that actually changed.  This also
             // catches transparent pixels left behind when a sprite moves.
-            int rowLeft = copyWidth;
+            int rowLeft = regionWidth;
             int rowRight = 0;
-            int x = 0;
-#ifdef __SWITCH__
-            // Convert four RGBA pixels to Kirikiri BGRA at once.  The prior
-            // memcpy-per-pixel loop was measurable after GPU rendering became
-            // fast, especially when several full-stage E-mote layers coexist.
-            static const uint8_t swizzleBytes[16] = {
-                2, 1, 0, 3, 6, 5, 4, 7,
-                10, 9, 8, 11, 14, 13, 12, 15};
-            const uint8x16_t swizzle = vld1q_u8(swizzleBytes);
-            uint32x4_t lastChanged = vdupq_n_u32(0);
-            int lastChangedX = 0;
-            for (; x + 4 <= copyWidth; x += 4)
+            if (sourceIsBGRA)
             {
-                const uint8x16_t rgba = vld1q_u8(sourceRow + static_cast<size_t>(x) * 4u);
-                const uint8x16_t bgra = vqtbl1q_u8(rgba, swizzle);
-                const uint8x16_t old = vld1q_u8(destinationRow + static_cast<size_t>(x) * 4u);
-                const uint32x4_t changed = vmvnq_u32(vceqq_u32(
-                    vreinterpretq_u32_u8(old), vreinterpretq_u32_u8(bgra)));
-                if (vmaxvq_u32(changed) != 0)
-                {
-                    if (rowLeft == copyWidth)
-                        rowLeft = x + (vgetq_lane_u32(changed, 0) ? 0 :
-                                       vgetq_lane_u32(changed, 1) ? 1 :
-                                       vgetq_lane_u32(changed, 2) ? 2 : 3);
-                    rowRight = x + 4;
-                    lastChangedX = x;
-                    lastChanged = changed;
-                    // Equal groups need no write. Determine the precise right
-                    // edge once per row rather than extracting four lanes for
-                    // every converted group; transparent erasure still counts.
-                    vst1q_u8(destinationRow + static_cast<size_t>(x) * 4u, bgra);
-                }
+                // GL targets are rendered in layer byte order already.
+                CopyChangedBGRARow(reinterpret_cast<std::uint32_t*>(destinationRow),
+                                   reinterpret_cast<const std::uint32_t*>(sourceRow),
+                                   regionWidth, &rowLeft, &rowRight);
             }
-            if (rowRight)
-                rowRight = lastChangedX + (vgetq_lane_u32(lastChanged, 3) ? 4 :
-                                          vgetq_lane_u32(lastChanged, 2) ? 3 :
-                                          vgetq_lane_u32(lastChanged, 1) ? 2 : 1);
-#endif
-            auto* destinationPixels = reinterpret_cast<std::uint32_t*>(destinationRow);
-            const auto* sourcePixels = reinterpret_cast<const std::uint32_t*>(sourceRow);
-            for (; x < copyWidth; ++x)
+            else
             {
-                const std::uint32_t sourcePixel = sourcePixels[x];
-                const std::uint32_t convertedPixel =
-                    (sourcePixel & 0xff00ff00u) |
-                    ((sourcePixel & 0x000000ffu) << 16) |
-                    ((sourcePixel & 0x00ff0000u) >> 16);
-                if (destinationPixels[x] != convertedPixel)
+                // The CPU backend is RGBA, while a 32-bpp Kirikiri Layer is
+                // BGRA in memory.  Preserve G/A and exchange R/B at the boundary.
+                const int copyWidth = regionWidth; // the loops below work on the region
+                int x = 0;
+#ifdef __SWITCH__
+                // Convert four RGBA pixels to Kirikiri BGRA at once.  The prior
+                // memcpy-per-pixel loop was measurable after GPU rendering became
+                // fast, especially when several full-stage E-mote layers coexist.
+                static const uint8_t swizzleBytes[16] = {
+                    2, 1, 0, 3, 6, 5, 4, 7,
+                    10, 9, 8, 11, 14, 13, 12, 15};
+                const uint8x16_t swizzle = vld1q_u8(swizzleBytes);
+                uint32x4_t lastChanged = vdupq_n_u32(0);
+                int lastChangedX = 0;
+                for (; x + 4 <= copyWidth; x += 4)
                 {
-                    destinationPixels[x] = convertedPixel;
-                    if (rowLeft == copyWidth)
-                        rowLeft = x;
-                    rowRight = x + 1;
+                    const uint8x16_t rgba = vld1q_u8(sourceRow + static_cast<size_t>(x) * 4u);
+                    const uint8x16_t bgra = vqtbl1q_u8(rgba, swizzle);
+                    const uint8x16_t old = vld1q_u8(destinationRow + static_cast<size_t>(x) * 4u);
+                    const uint32x4_t changed = vmvnq_u32(vceqq_u32(
+                        vreinterpretq_u32_u8(old), vreinterpretq_u32_u8(bgra)));
+                    if (vmaxvq_u32(changed) != 0)
+                    {
+                        if (rowLeft == copyWidth)
+                            rowLeft = x + (vgetq_lane_u32(changed, 0) ? 0 :
+                                           vgetq_lane_u32(changed, 1) ? 1 :
+                                           vgetq_lane_u32(changed, 2) ? 2 : 3);
+                        rowRight = x + 4;
+                        lastChangedX = x;
+                        lastChanged = changed;
+                        // Equal groups need no write. Determine the precise right
+                        // edge once per row rather than extracting four lanes for
+                        // every converted group; transparent erasure still counts.
+                        vst1q_u8(destinationRow + static_cast<size_t>(x) * 4u, bgra);
+                    }
+                }
+                if (rowRight)
+                    rowRight = lastChangedX + (vgetq_lane_u32(lastChanged, 3) ? 4 :
+                                              vgetq_lane_u32(lastChanged, 2) ? 3 :
+                                              vgetq_lane_u32(lastChanged, 1) ? 2 : 1);
+#endif
+                auto* destinationPixels = reinterpret_cast<std::uint32_t*>(destinationRow);
+                const auto* sourcePixels = reinterpret_cast<const std::uint32_t*>(sourceRow);
+                for (; x < copyWidth; ++x)
+                {
+                    const std::uint32_t sourcePixel = sourcePixels[x];
+                    const std::uint32_t convertedPixel =
+                        (sourcePixel & 0xff00ff00u) |
+                        ((sourcePixel & 0x000000ffu) << 16) |
+                        ((sourcePixel & 0x00ff0000u) >> 16);
+                    if (destinationPixels[x] != convertedPixel)
+                    {
+                        destinationPixels[x] = convertedPixel;
+                        if (rowLeft == copyWidth)
+                            rowLeft = x;
+                        rowRight = x + 1;
+                    }
                 }
             }
             if (rowLeft < rowRight)
             {
-                dirtyLeft = std::min(dirtyLeft, rowLeft);
+                dirtyLeft = std::min(dirtyLeft, regionX0 + rowLeft);
                 dirtyTop = std::min(dirtyTop, y);
-                dirtyRight = std::max(dirtyRight, rowRight);
+                dirtyRight = std::max(dirtyRight, regionX0 + rowRight);
                 dirtyBottom = y + 1;
             }
         }
@@ -242,6 +332,103 @@ static bool CopyRenderTargetToLayer(krkrsdl3::iTVPRenderBackend* renderer,
 
 iTJSDispatch2* ResourceManager::_kagWindow = nullptr;
 static SeparateLayerAdaptor* _motionWorkLayer = nullptr;
+
+// Asynchronous layer copies (GL backend with -emote_readback other than sync).
+//
+// draw() renders, starts the target's readback (RequestReadback) and records
+// the adaptor here instead of waiting for the GPU. At the start of the next
+// main loop iteration, before that iteration composes, the dispatch hook
+// finishes the readback and copies the changed pixels into the adaptor's
+// layer. The layer therefore shows the E-mote frame one iteration later, and
+// the main thread no longer stalls in glReadPixels.
+//
+// Only SeparateLayerAdaptor layers qualify: they belong to the adaptor and
+// nothing but E-mote writes them. motionWorkLayer does not: its owner copies
+// it right after draw(). D3D adaptors and plain layers stay synchronous.
+namespace
+{
+struct PendingLayerCopy
+{
+    iTJSDispatch2* owner; // the adaptor's TJS object, AddRef'd
+    void* target;
+    int width, height;
+};
+std::vector<PendingLayerCopy> g_pendingLayerCopies;
+
+SeparateLayerAdaptor* AdaptorOf(iTJSDispatch2* owner)
+{
+    if (!owner || owner->IsValid(0, nullptr, nullptr, owner) != TJS_S_TRUE)
+        return nullptr;
+    return ncbInstanceAdaptor<SeparateLayerAdaptor>::GetNativeInstance(owner);
+}
+
+// Finish one copy. false: the GPU is not done (only when wait is false).
+bool DeliverLayerCopy(const PendingLayerCopy& copy, bool wait)
+{
+    krkrsdl3::iTVPRenderBackend* renderer = krkrsdl3::TVPGetRenderBackend();
+    SeparateLayerAdaptor* self = AdaptorOf(copy.owner);
+    // A resized adaptor destroyed the old target (and its readback) already.
+    if (!renderer || !self || self->target != copy.target)
+        return true;
+    if (!renderer->CompleteReadback(copy.target, wait))
+        return false;
+    try
+    {
+        tTJSNI_BaseLayer* layer = self->GetLayer();
+        tTVPRect dirtyRect;
+        if (layer && CopyRenderTargetToLayer(renderer, copy.target, layer, copy.width, copy.height,
+                                             &dirtyRect, &self->layerSync) &&
+            !dirtyRect.is_empty())
+            layer->Update(dirtyRect);
+    }
+    catch (...)
+    {
+        // The layer went away between draw() and now; nothing to show.
+    }
+    return true;
+}
+
+void DeliverPendingLayerCopies()
+{
+    if (g_pendingLayerCopies.empty()) return;
+    std::vector<PendingLayerCopy> copies;
+    copies.swap(g_pendingLayerCopies);
+    for (const PendingLayerCopy& copy : copies)
+    {
+        // A whole frame has passed since the request; waiting here costs no
+        // more than the synchronous readback would have. Without a current GL
+        // context the copy stays queued for the next iteration (or draw()).
+        if (DeliverLayerCopy(copy, true))
+            copy.owner->Release();
+        else
+            g_pendingLayerCopies.push_back(copy);
+    }
+}
+
+// Deliver an older copy for the same target first (two draws in one
+// iteration), then start this frame's readback. false: draw synchronously.
+bool RequestLayerCopy(krkrsdl3::iTVPRenderBackend* renderer, iTJSDispatch2* owner, void* target,
+                      int width, int height)
+{
+    for (size_t i = 0; i < g_pendingLayerCopies.size(); ++i)
+    {
+        if (g_pendingLayerCopies[i].target != target) continue;
+        const PendingLayerCopy older = g_pendingLayerCopies[i];
+        g_pendingLayerCopies.erase(g_pendingLayerCopies.begin() + std::ptrdiff_t(i));
+        DeliverLayerCopy(older, true);
+        older.owner->Release();
+        break;
+    }
+    if (!renderer->RequestReadback(target))
+        return false;
+    owner->AddRef();
+    g_pendingLayerCopies.push_back(PendingLayerCopy{owner, target, width, height});
+    return true;
+}
+
+compat::RegisterInit g_emoteLayerCopyInit(compat::OrderModule, "emote_layer_copy",
+                                          [] { TVPAddDispatchHook(DeliverPendingLayerCopies); });
+} // namespace
 
 // KRKR-ns: drop the cached work layer when the script engine is torn down.
 //
@@ -671,6 +858,8 @@ void D3DAdaptor::captureCanvas(iTJSDispatch2* targetLayer)
         {
             TVPConsoleLog("[emote] capture upscaled %dx%d -> %ux%u", _renderW, _renderH,
                           layerW, layerH);
+            // GL targets are BGRA already; the CPU backend's are RGBA.
+            const int red = renderer->TargetIsBGRA(_target) ? 0 : 2;
             for (tjs_uint y = 0; y < layerH; ++y)
             {
                 const uint8_t* sourceRow =
@@ -681,9 +870,9 @@ void D3DAdaptor::captureCanvas(iTJSDispatch2* targetLayer)
                 {
                     const uint8_t* s = sourceRow + static_cast<std::ptrdiff_t>(x >> 1) * 4;
                     uint8_t* d = destinationRow + static_cast<std::ptrdiff_t>(x) * 4;
-                    d[0] = s[2];
+                    d[0] = s[red];
                     d[1] = s[1];
-                    d[2] = s[0];
+                    d[2] = s[2 - red];
                     d[3] = s[3];
                 }
             }
@@ -1335,11 +1524,24 @@ void EmotePlayer::draw(iTJSDispatch2* objthis)
         if (!withD3DAdaptor)
         {
             // 回读 CPU 像素并交给图层（GL 后端经 glReadPixels，软渲染后端零拷贝）
-            tTVPRect dirtyRect;
-            if (CopyRenderTargetToLayer(renderer, target, ths, _width, _height,
-                                        &dirtyRect) &&
-                !dirtyRect.is_empty())
-                ths->Update(dirtyRect);
+            // An adaptor's own layer is written by nothing but E-mote, so its
+            // copies can be limited to what changed and, on GL, be filled at
+            // the start of the next iteration from an asynchronous readback
+            // (RequestLayerCopy). Plain layers and motionWorkLayer, which
+            // scripts also touch, keep the full synchronous compare.
+            const bool ownLayer = !withoutAdaptor && self != _motionWorkLayer;
+            if (ownLayer && RequestLayerCopy(renderer, objthis, target, _width, _height))
+            {
+                renderer->UnlockTarget(target);
+            }
+            else
+            {
+                tTVPRect dirtyRect;
+                if (CopyRenderTargetToLayer(renderer, target, ths, _width, _height, &dirtyRect,
+                                            ownLayer ? &self->layerSync : nullptr) &&
+                    !dirtyRect.is_empty())
+                    ths->Update(dirtyRect);
+            }
         }
         else
         {

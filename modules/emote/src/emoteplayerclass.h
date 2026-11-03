@@ -95,6 +95,17 @@ private:
         storage = v; \
     }
 // SeparateLayerAdaptor
+// What CopyRenderTargetToLayer last wrote into a layer. While the target, the
+// layer and its pixel buffer are unchanged, the layer equals the target's CPU
+// pixels everywhere, so the next copy only visits the changed rectangle.
+struct EmoteLayerSync
+{
+    const void* target = nullptr;
+    const void* layer = nullptr;
+    const void* buffer = nullptr;
+    int pitch = 0, width = 0, height = 0;
+};
+
 class SeparateLayerAdaptor : public tTJSDispatch
 {
 public:
@@ -117,6 +128,7 @@ public:
     void* target = nullptr;
     void* maskTarget = nullptr;
     tjs_int _width = 0, _height = 0;
+    EmoteLayerSync layerSync;
 
 private:
     tTJSNI_Layer* _this = nullptr;
@@ -170,7 +182,6 @@ public:
     property_marco(playing, bool, _playing);
     property_marco(allplaying, bool, _allplaying);
     property_marco(animating, bool, _playing);
-    property_marco(useD3D, bool, _useD3D);
     int32_t get_loopTime();
     void set_loopTime(int32_t v) { throw "reject to set loopTime"; };
     tTJSString get_motionKey() { return _motionKey; }
@@ -300,7 +311,6 @@ private:
     bool _playing = false;
     bool _allplaying = false;
     bool _finitePlaybackGraph = false;
-    bool _useD3D = false;
     int _pipoVal = 0;
     tTJSVariant _tags;
 };
