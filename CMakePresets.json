@@ -1,5 +1,5 @@
 {
-    "version": 2,
+    "version": 3,
     "configurePresets": [
         {
             "name": "linux-x64",
@@ -16,9 +16,27 @@
                 "VCPKG_TARGET_TRIPLET": "x64-linux",
                 "VCPKG_TARGET_ARCHITECTURE": "x64"
             }
+        },
+        {
+            "name": "linux-x64-pgo-gen",
+            "inherits": "linux-x64",
+            "displayName": "Linux x64, instrumented for PGO training (tools/pgo.sh)",
+            "cacheVariables": {
+                "LLLJ_PGO": "generate",
+                "LLLJ_LTO": "OFF"
+            }
         }
     ],
     "buildPresets": [
-        { "name": "linux-x64", "configurePreset": "linux-x64", "configuration": "Release" }
+        {
+            "name": "linux-x64",
+            "configurePreset": "linux-x64",
+            "configuration": "Release"
+        },
+        {
+            "name": "linux-x64-pgo-gen",
+            "configurePreset": "linux-x64-pgo-gen",
+            "configuration": "Release"
+        }
     ]
 }

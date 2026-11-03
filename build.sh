@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Configure (first run or after moving the checkout) and build the Release engine.
 #   ./build.sh [extra cmake configure args...]
-# env: BUILD_JOBS (default 8), VCPKG_ROOT (default ~/vcpkg)
+# env: BUILD_JOBS (default 8), VCPKG_ROOT (default ~/vcpkg),
+#      PRESET (default linux-x64; linux-x64-pgo-gen is the PGO training build, see tools/pgo.sh)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 # Keep foreign toolchains (e.g. linuxbrew) out of the build.
@@ -12,8 +13,9 @@ export CMAKE_POLICY_VERSION_MINIMUM=3.5
 unset PKG_CONFIG_PATH LD_LIBRARY_PATH CPATH LIBRARY_PATH
 
 "$ROOT/tools/fetch_ffmpeg.sh"
-BUILD="$ROOT/build/linux-x64"
-CONFIG=(--preset linux-x64)
+PRESET="${PRESET:-linux-x64}"
+BUILD="$ROOT/build/$PRESET"
+CONFIG=(--preset "$PRESET")
 if [[ -f "$BUILD/CMakeCache.txt" ]] && ! grep -Fqx "CMAKE_HOME_DIRECTORY:INTERNAL=$ROOT" "$BUILD/CMakeCache.txt"; then
     CONFIG+=(--fresh)
 fi

@@ -43,7 +43,8 @@ games/lllj/setup.sh [../limelight/result]  # 用解包后的游戏数据生成�
 ./run.sh                                  # 在当前桌面运行
 ```
 
-`./build.sh` 的参数原样传给 CMake configure（如 `-DGAME=lllj`），`BUILD_JOBS` 控制并行数。
+`./build.sh` 的参数原样传给 CMake configure（如 `-DGAME=lllj`），`BUILD_JOBS` 控制并行数，`PRESET` 选 CMake 预设（默认 `linux-x64`）。
+发布用构建：`tools/pgo.sh`（本机约 14 分钟：插桩构建 + 无头训练约 10 分钟 + 优化构建）。
 `./run.sh` 的参数原样传给引擎；`HEADLESS=1` 用私有 Xvfb + 无声运行，`REPLCH=目录` 打开 REPL 文件通道（`tools/dev/repl.sh`）。
 游戏相关的用法（语言切换、存档、回归测试）见 [games/lllj/README.md](games/lllj/README.md)。
 
@@ -53,6 +54,7 @@ games/lllj/setup.sh [../limelight/result]  # 用解包后的游戏数据生成�
 |---|---|---|
 | `-DLLLJ_LTO=OFF` | ON | Release 构建的链接时优化（引擎、模块、插件、FetchContent 依赖；vcpkg 静态库和 FFmpeg 除外）。`-DLLLJ_LTO_JOBS=N` 限制链接时并行数 |
 | （无开关） | | vcpkg 的 `zlib` 由覆盖端口 `cmake/vcpkg-overlays/zlib` 提供：zlib-ng 的 zlib 兼容模式（解压更快、SIMD 校验和），PNG、XP3、PSB、freetype 都受益 |
+| `-DLLLJ_PGO=generate\|use` | 空 | 按剖析结果优化（PGO），一般由 `tools/pgo.sh` 设置：先构建插桩版（`PRESET=linux-x64-pgo-gen`，目录 `build/linux-x64-pgo-gen`），无头跑测试脚本收集剖析数据到 `build/pgo-profile`，再以 `use` 重建 `build/linux-x64`。`-DLLLJ_PGO=` 关闭。源码改动后剖析数据只是部分失效（控制流变了的函数按无 PGO 编译），不影响正确性；改动较大时重跑 `tools/pgo.sh` |
 | `-DLLLJ_DEV_STATS=ON` | OFF | 编入引擎的内存统计（全局 new/delete 计数与 Krkrz 池、内存浮层、周期 dump）。只用于查内存问题：它让每次分配都过一把池锁 |
 
 ## 目录

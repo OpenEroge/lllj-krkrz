@@ -88,6 +88,41 @@ if(LLLJ_LTO)
         message(WARNING "LLLJ_LTO: not supported by this toolchain: ${_lllj_ipo_msg}")
     endif()
 endif()
+# Profile-guided optimization, driven by tools/pgo.sh. "generate" builds an
+# instrumented binary that adds its counters to LLLJ_PGO_DIR when it exits;
+# "use" optimizes with them. -fprofile-prefix-path makes the profile names
+# relative to the build directory, so the profile of the training build
+# (build/linux-x64-pgo-gen) applies to the Release build (build/linux-x64).
+# A stale profile only costs optimization: functions whose control flow
+# changed since the training run are compiled as without PGO. Coverage
+# mismatch warnings are off: sources that FetchContent unpacks into the build
+# directory (harfbuzz, SDL3, ogg, vorbis...) have different paths in the two
+# builds, which GCC reports for every function although it still applies
+# their counts.
+set(LLLJ_PGO "" CACHE STRING "profile-guided optimization: empty, generate or use (tools/pgo.sh)")
+set_property(CACHE LLLJ_PGO PROPERTY STRINGS "" generate use)
+set(LLLJ_PGO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/pgo-profile" CACHE PATH "PGO profile directory")
+if(LLLJ_PGO STREQUAL "generate")
+    set(_lllj_pgo_compile -fprofile-generate=${LLLJ_PGO_DIR} -fprofile-update=prefer-atomic
+        -fprofile-prefix-path=${CMAKE_BINARY_DIR})
+    set(_lllj_pgo_link -fprofile-generate=${LLLJ_PGO_DIR} -fprofile-update=prefer-atomic)
+elseif(LLLJ_PGO STREQUAL "use")
+    set(_lllj_pgo_compile -fprofile-use=${LLLJ_PGO_DIR} -fprofile-partial-training
+        -fprofile-prefix-path=${CMAKE_BINARY_DIR} -Wno-missing-profile -Wno-coverage-mismatch)
+    set(_lllj_pgo_link -fprofile-use=${LLLJ_PGO_DIR} -fprofile-partial-training)
+elseif(NOT LLLJ_PGO STREQUAL "")
+    message(FATAL_ERROR "LLLJ_PGO must be empty, generate or use (got '${LLLJ_PGO}')")
+endif()
+foreach(_flag IN LISTS _lllj_pgo_compile)
+    add_compile_options($<$<AND:$<CONFIG:Release>,$<COMPILE_LANGUAGE:C,CXX>>:${_flag}>)
+endforeach()
+foreach(_flag IN LISTS _lllj_pgo_link)
+    add_link_options($<$<CONFIG:Release>:${_flag}>)
+endforeach()
+if(LLLJ_PGO)
+    message(STATUS "LLLJ_PGO=${LLLJ_PGO}, profile directory ${LLLJ_PGO_DIR}")
+endif()
+
 # vcpkg's toolchain compiles with -fPIC; the executable is not a shared
 # library, so nothing interposes its symbols and calls between them may inline.
 add_compile_options($<$<AND:$<CONFIG:Release>,$<COMPILE_LANGUAGE:C,CXX>>:-fno-semantic-interposition>)
