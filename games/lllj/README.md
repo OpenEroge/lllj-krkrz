@@ -90,3 +90,6 @@ games/lllj/tests/regress.sh artifacts/run-02 zh movie   # 只跑部分
 TJS 里 `CompatNative.resetFrameStats("scene")` / `frameStats()` / `storageStats()`。Xvfb 用 llvmpipe，它的帧数不能当成显示器刷新率。
 
 绘制线程：`-drawthread=N` 线程池大小（默认物理核数），`-drawthreadchunk=N` 每份最少 `factor×N` 像素（默认 10000，0 = 上游行为）。
+
+背景预读：`prelude/game.tjs` 在剧本播放时向前看 30 行，把将要显示的 PNG/JPEG 背景（含 `_cn` 本地化版本）交给引擎的加载线程解码；
+`-lllj_prefetch=no` 关闭（对比测量用，见 `tests/perf/bgprefetch.py`）。

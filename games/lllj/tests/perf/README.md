@@ -11,6 +11,7 @@
 | `pixel_check.py OUT` | 跑一组固定的图层操作并保存 BMP，打印哈希；不同 `-drawthread`/`-drawthreadchunk` 下哈希应该一致 |
 | `sample.py OUT N` / `wsample.py OUT N` | 快进期间用 gdb 抽栈（主线程 / 全部线程） |
 | `menu.py OUT [N]` | 游戏中开关设置画面 N 次（默认 20），输出每次开关的主线程 CPU 毫秒、最长呈现间隔 |
+| `bgprefetch.py OUT [秒数] [--no-prefetch]` | 快进 N 秒，统计每次背景加载时图像是否已由预读解码好（cached / inflight / miss），并测一次单张预读 |
 | `png_bench.py OUT [N]` | 标题画面下用 `Layer.loadImages` 读 N 张背景 PNG（每张前清图像缓存，取三次最快），输出中位数/均值毫秒 |
 
 共用环境变量：

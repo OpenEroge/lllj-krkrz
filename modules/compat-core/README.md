@@ -21,5 +21,8 @@ The foundation every other module and game profile builds on.
   compile against engine-internal headers inside the executable, with private
   symbol names per module (`TVP_PLUGIN_NAME`).
 - **`compat/layer.h`**: `compat::LayerOf()` and `Layer_FetchImageSize()`.
+- **`CompatNative.prefetchImage(name)` / `imagePrefetchBusy()`** (`src/prefetch.cpp`): decode an image on the
+  engine's loader thread into the graphic cache under the key a later `Layer.loadImages(name)` uses, and
+  whether a decode is still queued or running. A game's lookahead uses them (`games/lllj/prelude/game.tjs`).
 
 Writing a new module: see [docs/modules.md](../../docs/modules.md).

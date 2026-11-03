@@ -23,6 +23,8 @@ krkrz_dev 伞形工程不再使用：本仓库的顶层 `CMakeLists.txt` 只保�
 | Add SDLOGLDrawDevice.recreate() | `SDLOGLDrawDevice` | 游戏 `onResize` 调用 `drawDevice.recreate()`；交换缓冲计入 render stats |
 | Add engine extension hooks (EngineHooks.h) | 新文件 + `StorageIntf`、`LoadPNG`、`Application`、`SDLOGLDrawDevice` | 存储解析/图像嗅探/帧呈现/主循环回调，见 [architecture.md](architecture.md) |
 | Index auto paths incrementally | `StorageIntf.cpp` | 运行时 `addAutoPath` 每次全量重扫（约 0.3 秒）；`-autopath_incremental=no` 恢复上游行为 |
+| Make bitmap and graphic cache refcounts atomic | `LayerBitmapImpl.h`、`GraphicsLoaderIntf.cpp` | 异步预读在工作线程推入图像缓存后释放临时位图，主线程同时命中缓存共享同一位图，引用计数是普通 int |
+| Take back queued image prefetches instead of waiting for them | `GraphicsLoadThread.*`、`GraphicsLoaderIntf.cpp` | 预读是单线程 FIFO，同步加载会等完排在前面的所有解码；现在未开始的预读被取回、改为同步解码。`TVPSetGraphicCacheLimit`/`TVPTouchImages` 补上缓存锁，后者改用与加载相同的缓存键 |
 
 新增引擎选项：`-drawthreadchunk=N`（默认 10000，0 = 上游行为）、`-autopath_incremental=no`。
 

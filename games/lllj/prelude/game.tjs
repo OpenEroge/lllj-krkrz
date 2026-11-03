@@ -68,6 +68,89 @@ function lllj_toggleLanguagePanel() {
 	panel.open();
 }
 
+// Background prefetch. Backgrounds are 2120x1280 PNGs that take ~27 ms to decode, a visible
+// hitch at every background change when decoded on the main thread. KAGEnvPlayer.play runs
+// the compiled scene (scenario.lines) one line per call; before each call this scans a few
+// lines ahead for stage images and has the engine decode them on its loader thread
+// (CompatNative.prefetchImage), so the real Layer.loadImages finds them in the graphic cache.
+// Names are resolved like AffineSourceImage does (getExistImageNameForLayer), which gives the
+// same cache key. Only PNG/JPEG are worth it: event CGs (.pimg) and sprites are TLG and decode
+// fast, but some event layers show PNG effect images.
+// -lllj_prefetch=no turns it off (A/B measurements).
+var lllj_prefetchAhead = 30;      // lines scanned ahead of the play position
+var lllj_prefetchScenario;        // scenario object being scanned
+var lllj_prefetchNext = 0;        // first line index of it not scanned yet
+var lllj_prefetchQueue = [];      // [line index, image name], in play order
+var lllj_prefetchResolved = %[];  // language tag + "/" + imageFile.file -> name, "" = not prefetched
+function lllj_prefetchResolve(file) {
+	// The game shows a localized variant name_<UI language tag> (e.g. _cn, from the Chinese
+	// patch pack) when one exists, the same rule as uisupport.tjs's storage proxy.
+	var tag = typeof global.CurrentLanguageUITag == "String" ? CurrentLanguageUITag : "jp";
+	var key = tag + "/" + file;
+	var name = lllj_prefetchResolved[key];
+	if (name !== void) return name;
+	name = getExistImageNameForLayer(file);
+	if (typeof name != "String") name = "";
+	var ext = Storages.extractStorageExt(name).toLowerCase();
+	if (ext != ".png" && ext != ".jpg") name = "";
+	if (name != "" && tag != "jp") {
+		var localized = Storages.chopStorageExt(name) + "_" + tag + ext;
+		if (Storages.isExistentStorage(localized)) name = localized;
+	}
+	return lllj_prefetchResolved[key] = name;
+}
+// Tag lines are ["envupdate", "update", [item...], ...] or ["delayrun", n, "envupdate", ...];
+// items are dictionaries {class:"stage", redraw:{imageFile:{file:"..."}}}. Text lines
+// start with a number and only snapshot the current state.
+function lllj_prefetchScanLine(line, index) {
+	if (!(line instanceof "Array") || line.count == 0 || typeof line[0] != "String") return;
+	for (var i = 1; i < line.count; i++) {
+		var items = line[i];
+		if (typeof items != "Object" || !(items instanceof "Array")) continue;
+		for (var j = 0; j < items.count; j++) {
+			var item = items[j];
+			if (typeof item != "Object" || !(item instanceof "Dictionary")) continue;
+			var cls = item["class"];
+			if (cls != "stage" && cls != "stage2" && cls != "event") continue;
+			var redraw = item.redraw;
+			if (typeof redraw != "Object" || !(redraw instanceof "Dictionary")) continue;
+			var image = redraw.imageFile;
+			if (typeof image != "Object" || !(image instanceof "Dictionary") || typeof image.file != "String") continue;
+			var name = lllj_prefetchResolve(image.file);
+			if (name != "") lllj_prefetchQueue.add([index, name]);
+		}
+	}
+}
+function lllj_prefetchFor(player) {
+	var scenario = player.scenario;
+	if (typeof scenario != "Object" || scenario === null || !(scenario.lines instanceof "Array")) return;
+	var cur = player.cur;
+	if (scenario !== lllj_prefetchScenario || cur < lllj_prefetchNext - lllj_prefetchAhead - 1) {
+		// another scene, or a jump back (load, backlog jump): start over from here
+		lllj_prefetchScenario = scenario;
+		lllj_prefetchNext = cur;
+		lllj_prefetchQueue.clear();
+	}
+	if (lllj_prefetchNext < cur) lllj_prefetchNext = cur;
+	var lines = scenario.lines;
+	var end = cur + lllj_prefetchAhead;
+	if (end > lines.count) end = lines.count;
+	for (; lllj_prefetchNext < end; lllj_prefetchNext++) lllj_prefetchScanLine(lines[lllj_prefetchNext], lllj_prefetchNext);
+	while (lllj_prefetchQueue.count > 0 && lllj_prefetchQueue[0][0] < cur) lllj_prefetchQueue.erase(0);
+	// One decode at a time: the engine's loader is a single FIFO thread, and a load of an
+	// image still queued there is decoded on the main thread instead of waiting.
+	for (var n = 0; n < 2 && lllj_prefetchQueue.count > 0 && !CompatNative.imagePrefetchBusy(); n++) {
+		CompatNative.prefetchImage(lllj_prefetchQueue[0][1]);
+		lllj_prefetchQueue.erase(0);
+	}
+}
+class LLLJEnvPlayerMembers {
+	function play(storage, flag) {
+		try { lllj_prefetchFor(this); } catch (e) { lllj_log("prefetch: " + e.message); }
+		return (global.lllj_originalEnvPlay incontextof this)(storage, flag);
+	}
+}
+
 var lllj_originalExecStorage = Scripts.execStorage;
 function lllj_execStorage(storage, mode) {
 	var r = mode === void ? lllj_originalExecStorage(storage) : lllj_originalExecStorage(storage, mode);
@@ -77,6 +160,11 @@ function lllj_execStorage(storage, mode) {
 	}
 	if (Storages.extractStorageName(storage).toLowerCase() == "scnchart_ui_smp.tjs")
 		CompatNative.attachMembers(LLLJPlayBackViewMembers, PlayBackViewUtil, true);
+	if (Storages.extractStorageName(storage).toLowerCase() == "kagenvplayer.tjs" &&
+			System.getArgument("-lllj_prefetch") != "no") {
+		global.lllj_originalEnvPlay = KAGEnvPlayer.play;
+		CompatNative.attachMembers(LLLJEnvPlayerMembers, KAGEnvPlayer, true);
+	}
 	// Chinese patch: its online update check (yuzu_patchdetect.tjs) stays off, which also
 	// hides its menu item; custom.tjs reads the flag after yuzu_default.tjs.
 	if (Storages.extractStorageName(storage).toLowerCase() == "yuzu_default.tjs" && CompatNative.xpckEnabled())
