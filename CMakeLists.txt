@@ -128,6 +128,12 @@ add_compile_options($<$<AND:$<CONFIG:Release>,$<COMPILE_LANGUAGE:C,CXX>>:-fno-se
 # call into a direct one, IPA mod/ref analysis used exactly that and Layer's
 # constructor ignored its parent (every child layer became a primary layer).
 add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:-fno-strict-aliasing>)
+# Do not export symbols of the static archives (HarfBuzz, FreeType, zlib, PNG...).
+# libass.so references FT_*/hb_*, so ld would export our bundled definitions from
+# the non-PIE executable into .dynsym for it; they then interpose the system
+# libharfbuzz/libfreetype used by libdecor-cairo's Pango in the same process (the
+# Wayland window decorations), and the ABI mix crashes when the window is shown.
+add_link_options("LINKER:--exclude-libs,ALL")
 
 # HarfBuzz for glyphware, shared by every user (cmake/CommonExternals.cmake).
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/CommonExternals.cmake)
