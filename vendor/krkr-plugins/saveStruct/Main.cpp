@@ -69,6 +69,9 @@ static inline tjs_error invokeArrayFunc(iTJSDispatch2 *array, iTJSDispatch2* &fu
 /**
  * 辞書の内容表示用の呼び出しロジック
  */
+// lllj-krkrz: internal linkage. json defines a different DictMemberDispCaller in the same
+// executable; with external linkage the linker kept one copy of its inline members for both.
+namespace {
 class DictMemberDispCaller : public tTJSDispatch /** EnumMembers 用 */
 {
 protected:
@@ -144,6 +147,7 @@ public:
 		if (!first && (option & OPTION_INDENT)) writer->delIndent(); // インデント閉じ判定
 	}
 };
+} // namespace
 
 static void getDictString(iTJSDispatch2 *dict, IWriter *writer, tjs_uint32 option=0)
 {

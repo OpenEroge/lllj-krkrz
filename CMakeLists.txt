@@ -66,6 +66,29 @@ set(VCPKG_MANIFEST_DIR "${CMAKE_BINARY_DIR}" CACHE PATH "merged vcpkg manifest" 
 
 project(lllj_krkrz VERSION 1.0)
 
+# Link-time optimization of everything built in this tree (engine, modules,
+# plugins, FetchContent dependencies) in the Release configuration. vcpkg's
+# static libraries and FFmpeg are linked as before. CMP0069 NEW makes the
+# subprojects with old cmake_minimum_required (ogg, vorbis) honour it too.
+option(LLLJ_LTO "link-time optimization (Release)" ON)
+set(LLLJ_LTO_JOBS "" CACHE STRING "parallel LTRANS jobs at link time (empty: -flto=auto)")
+if(LLLJ_LTO)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT _lllj_ipo OUTPUT _lllj_ipo_msg LANGUAGES C CXX)
+    if(_lllj_ipo)
+        set(CMAKE_POLICY_DEFAULT_CMP0069 NEW)
+        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+        if(LLLJ_LTO_JOBS)
+            add_link_options($<$<CONFIG:Release>:-flto=${LLLJ_LTO_JOBS}>)
+        endif()
+    else()
+        message(WARNING "LLLJ_LTO: not supported by this toolchain: ${_lllj_ipo_msg}")
+    endif()
+endif()
+# vcpkg's toolchain compiles with -fPIC; the executable is not a shared
+# library, so nothing interposes its symbols and calls between them may inline.
+add_compile_options($<$<AND:$<CONFIG:Release>,$<COMPILE_LANGUAGE:C,CXX>>:-fno-semantic-interposition>)
+
 # HarfBuzz for glyphware, shared by every user (cmake/CommonExternals.cmake).
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/CommonExternals.cmake)
 

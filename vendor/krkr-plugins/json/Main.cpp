@@ -38,6 +38,9 @@ static bool TVPUtf16ToUtf8( std::string& out, const tjs_string& in ) {
 
 // ----------------------------------------------------------------------
 
+// lllj-krkrz: internal linkage. csvParser defines a different IFileStorage in the same
+// executable; with external linkage the linker kept one copy of its inline members for both.
+namespace {
 class IFileStorage  {
 
 	iTJSBinaryStream *in;
@@ -131,6 +134,7 @@ public:
 		}
 	}
 };
+} // namespace
 
 
 // -----------------------------------------------------------------
@@ -807,6 +811,9 @@ static void getVariantString(tTJSVariant &var, IWriter *writer);
 /**
  * 辞書の内容表示用の呼び出しロジック
  */
+// lllj-krkrz: internal linkage. saveStruct defines a different DictMemberDispCaller in the same
+// executable; with external linkage the linker kept one copy of its inline members for both.
+namespace {
 class DictMemberDispCaller : public tTJSDispatch /** EnumMembers 用 */
 {
 protected:
@@ -843,6 +850,7 @@ public:
 		return TJS_S_OK;
 	}
 };
+} // namespace
 
 static void getDictString(iTJSDispatch2 *dict, IWriter *writer)
 {

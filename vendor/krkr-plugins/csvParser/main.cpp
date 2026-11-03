@@ -37,6 +37,9 @@ public:
 	virtual bool addNextLine(ttstr &str) = 0;
 };
 
+// lllj-krkrz: internal linkage. json defines a different IFileStorage in the same
+// executable; with external linkage the linker kept one copy of its inline members for both.
+namespace {
 class IFileStorage : public IFile {
 
 	iTJSBinaryStream *in;
@@ -135,6 +138,7 @@ public:
 		}
 	}
 };
+} // namespace
 
 class IFileStr : public IFile {
 

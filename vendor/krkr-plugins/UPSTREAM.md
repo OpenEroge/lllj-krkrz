@@ -1,6 +1,6 @@
 # Vendored krkrz plugins
 
-Copied verbatim (no local changes) from the submodules of
+Copied verbatim from the submodules of
 [wamsoft/krkrz_dev](https://github.com/wamsoft/krkrz_dev) at 21d20e9745e13c9ffe68ae2eb012548afe73aaa8.
 Each directory keeps its own license file. Only the plugins the build links are kept.
 
@@ -24,3 +24,10 @@ Each directory keeps its own license file. Only the plugins the build links are 
 | ncbind | https://github.com/wamsoft/ncbind.git | 256502b817e6 |
 | tp_stub | https://github.com/wamsoft/tp_stub.git | 35ef31ad0630 |
 | simplebinder | https://github.com/wamsoft/simplebinder.git | 46a90eac839d |
+
+## Local changes
+
+- `json/Main.cpp`, `csvParser/main.cpp`, `saveStruct/Main.cpp`: `IFileStorage` (json, csvParser) and
+  `DictMemberDispCaller` (json, saveStruct) moved into anonymous namespaces. Each plugin defines a different
+  class under the same name; linked into one executable, the linker kept a single copy of their inline
+  members for both (an ODR violation that LTO reports as `-Wlto-type-mismatch`).
