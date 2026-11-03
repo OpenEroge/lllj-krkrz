@@ -126,6 +126,12 @@ endif()
 # vcpkg's toolchain compiles with -fPIC; the executable is not a shared
 # library, so nothing interposes its symbols and calls between them may inline.
 add_compile_options($<$<AND:$<CONFIG:Release>,$<COMPILE_LANGUAGE:C,CXX>>:-fno-semantic-interposition>)
+# Kirikiri code passes typed pointers through casts everywhere, e.g.
+# NativeInstanceSupport(..., (iTJSNativeInstance**)&layer). Under strict
+# aliasing that write cannot change `layer`; once LTO+PGO turned the virtual
+# call into a direct one, IPA mod/ref analysis used exactly that and Layer's
+# constructor ignored its parent (every child layer became a primary layer).
+add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:-fno-strict-aliasing>)
 
 # HarfBuzz for glyphware, shared by every user (cmake/CommonExternals.cmake).
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/CommonExternals.cmake)
