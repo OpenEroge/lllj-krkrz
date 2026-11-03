@@ -63,6 +63,9 @@ krkrz_merge_vcpkg_manifest(
     SUBDIRS ${_vcpkg_subdirs}
     EXCLUDE "movie-player:glew" "movie-player:glfw3")  # movie-player samples only
 set(VCPKG_MANIFEST_DIR "${CMAKE_BINARY_DIR}" CACHE PATH "merged vcpkg manifest" FORCE)
+# Overlay ports: "zlib" is zlib-ng in zlib-compatible mode (faster inflate and
+# SIMD checksums for PNG, XP3, PSB and freetype; see its portfile).
+set(VCPKG_OVERLAY_PORTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/vcpkg-overlays" CACHE STRING "vcpkg overlay ports" FORCE)
 
 project(lllj_krkrz VERSION 1.0)
 

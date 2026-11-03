@@ -52,6 +52,7 @@ games/lllj/setup.sh [../limelight/result]  # 用解包后的游戏数据生成�
 | 选项 | 默认 | 作用 |
 |---|---|---|
 | `-DLLLJ_LTO=OFF` | ON | Release 构建的链接时优化（引擎、模块、插件、FetchContent 依赖；vcpkg 静态库和 FFmpeg 除外）。`-DLLLJ_LTO_JOBS=N` 限制链接时并行数 |
+| （无开关） | | vcpkg 的 `zlib` 由覆盖端口 `cmake/vcpkg-overlays/zlib` 提供：zlib-ng 的 zlib 兼容模式（解压更快、SIMD 校验和），PNG、XP3、PSB、freetype 都受益 |
 | `-DLLLJ_DEV_STATS=ON` | OFF | 编入引擎的内存统计（全局 new/delete 计数与 Krkrz 池、内存浮层、周期 dump）。只用于查内存问题：它让每次分配都过一把池锁 |
 
 ## 目录
