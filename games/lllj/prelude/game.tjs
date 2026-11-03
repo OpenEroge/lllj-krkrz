@@ -151,6 +151,12 @@ class LLLJEnvPlayerMembers {
 	}
 }
 
+function lllj_uncoverTitle() {
+	if (typeof global.SystemHook != "Object" || SystemHook.currentState != "title") return;
+	System.removeContinuousHandler(lllj_uncoverTitle);
+	kag.tagHandlers.syscover(%[ visible: "false" ]);
+}
+
 var lllj_originalExecStorage = Scripts.execStorage;
 function lllj_execStorage(storage, mode) {
 	var r = mode === void ? lllj_originalExecStorage(storage) : lllj_originalExecStorage(storage, mode);
@@ -169,6 +175,14 @@ function lllj_execStorage(storage, mode) {
 	// hides its menu item; custom.tjs reads the flag after yuzu_default.tjs.
 	if (Storages.extractStorageName(storage).toLowerCase() == "yuzu_default.tjs" && CompatNative.xpckEnabled())
 		SystemConfig.noPatchDetect = true;
+	// -lllj_logo=no starts at the title: first.ks skips its first.logo hook (caution screen
+	// and brand logos) when SystemConfig.stopSkipOnMessageReceived is set. The caution screen
+	// is what lifts custom.ks's white start cover, so that is done once the title is up.
+	// The scenario tests use it everywhere except the case that covers startup itself.
+	if (Storages.extractStorageName(storage).toLowerCase() == "yuzu_default.tjs" && System.getArgument("-lllj_logo") == "no") {
+		SystemConfig.stopSkipOnMessageReceived = true;
+		System.addContinuousHandler(lllj_uncoverTitle);
+	}
 	return r;
 }
 Scripts.execStorage = lllj_execStorage;

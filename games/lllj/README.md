@@ -49,28 +49,41 @@ python3 -I games/lllj/import_saves.py /path/to/old/saves
 
 ## 回归测试
 
-需要 `Xvfb`、`xdotool`、Python 3.12+。每次用新的输出目录；脚本隔离存档、临时目录、REPL 和 Xvfb，只清理自己的进程。
-完整 smoke 会从 `../limelight/补丁/全CG存档/全CG存档.zip` 复制解锁数据到测试目录。
+需要 `Xvfb`、`xdotool`、Python 3.12+。测试由一个个**用例**组成（`tests/cases.py`），每个用例在自己的引擎、Xvfb、
+存档和输出目录里跑，`tests/run.py` 并行调度。用例从标题画面直接开始（`-lllj_logo=no`，见下），只有 `startup` 走注意事项和 Logo。
+解锁数据从 `../limelight/补丁/全CG存档/全CG存档.zip` 复制到测试目录。
 
 ```bash
-games/lllj/tests/regress.sh artifacts/run-01            # 全部套件，结果在 artifacts/run-01/summary.txt
-games/lllj/tests/regress.sh artifacts/run-02 zh movie   # 只跑部分
+games/lllj/tests/run.py --changed            # 日常：只跑改动涉及的用例（相对 HEAD 的工作区 + 未跟踪文件）
+games/lllj/tests/run.py --changed=main       # 相对某个提交
+games/lllj/tests/run.py emote_sd_a zh        # 指定用例或套件；--list 列出全部
+games/lllj/tests/regress.sh artifacts/run-01 # 全量（= run.py all），只在一批改动完成或要求时跑
 ```
 
-| 套件 | 覆盖 |
-|---|---|
-| `smoke` | 启动/Logo、标题、新游戏推进、backlog、普通/快速存读档、鉴赏入口、10 个设置分页、全屏/缩放、右键返回 |
-| `emote` | 两个 Logo、31 个 SD、9 种标题背景、eyecatch（每个都要求画面在动） |
-| `movie` | 鉴赏里的 OP + 7 个 ED：打开的文件、画面在变、位置前进、播完/右键/Esc 返回、音画落后 ≤ 60ms |
-| `audio` | 带通幅频响应、剧本引用的 16 个特效 + 混响、语音特效路径与口型电平、14 个 `.mchx` |
-| `extras` | 流程图连线、颜色轮盘、手柄设置页、条纹转场计时、PackinOne 散件、mosaic/turn 与 extNagano 转场 |
-| `zh` | 汉化包挂载、中文标题动画、标题按钮切换、Alt+L 选繁体、WebP、正文/backlog 语言、OP 简/繁/日字幕 |
-| `winsave` | 复制 Windows 汉化存档，恢复到预期场景并推进 |
-| `smoke-jp` | 纯日文版（`-lllj_zh=no`）的 smoke |
+输出在 `-o` 指定的目录（默认 `artifacts/t-<时间>`）：`summary.txt`、每个用例的 `<用例>/`（`report.json`、`game.log`、截图）
+和 `<用例>.out`；失败用例的最后 30 行直接打印。每个用例的耗时记在 `artifacts/.case-timings.json`，下次按最长优先排队。
 
-单个套件也可直接跑：`python3 -I games/lllj/tests/scenarios.py OUT --only zh`（`--engine-arg=...` 追加引擎参数，
-`--vomstyle layer` 强制视频模式）。任何 `exception occured`、REPL 失败、超时都算失败；例外只有 `scenarios.py` 里逐条评估过的
-`KNOWN_CAUGHT`（汉化包脚本自己 try/catch 的两处）、`KNOWN_DIALOGS`（汉化包的防倒卖提示）和 `WIN32_STUBS`（Windows 专有、无对应功能的 stub）。
+`--changed` 按 `cases.py` 里每个用例声明的源文件路径挑用例；改到引擎核心、`compat-core`、prelude、测试框架等
+影响全局的文件时，只跑核心集（`dialogue_backlog save_load controls extras_static zh_lang_ui`），不会自动跑全量。
+
+| 套件 | 用例 | 覆盖 |
+|---|---|---|
+| `smoke` | `startup` `dialogue_backlog` `save_pages` `save_load` `gallery_cg` `gallery_modes` `settings_a/b` `controls` `jp` | 注意事项/Logo（画面在动）、新游戏推进、backlog、存读档页与普通/快速存档往返、鉴赏、10 个设置分页、全屏/缩放/点击/右键/回车、纯日文版（`-lllj_zh=no`） |
+| `emote` | `startup` `emote_sd_a…d` `emote_title_bg` `emote_eyecatch` | 31 个 SD、9 种标题背景、eyecatch（每个都要求画面在动） |
+| `movie` | `movie_op` `movie_skip` `movie_end_a…c` | OP + 7 个 ED：打开的文件、画面在变、位置前进、播完/右键/Esc 返回、音画落后 ≤ 60ms |
+| `audio` | `audio_voice` `audio_effects` `audio_mtrack` | 带通幅频响应、语音特效路径与口型电平、17 种特效（同时播放，各自的电平和尾音）、14 个 `.mchx` 的分轨静音/恢复 |
+| `extras` | `extras_static` `extras_ui` `extras_wipe` `extras_trans_a/b` | PackinOne 散件、流程图连线、颜色轮盘、手柄设置页、条纹转场计时、mosaic/turn 与 extNagano 转场 |
+| `zh` | `zh_lang_ui` `zh_dialogue` `zh_subtitles` `zh_mv1` | 汉化包挂载、标题切换、Alt+L 选繁体、WebP、正文/backlog 语言、OP 简/繁/日字幕、MV |
+| — | `winsave` | 复制 Windows 汉化存档，恢复到预期场景并推进 |
+
+单个用例也可前台直接跑：`python3 -I games/lllj/tests/cases.py OUT 用例名 [引擎参数...]`。任何 `exception occured`、REPL 失败、超时都算失败；
+例外只有 `scenarios.py` 里逐条评估过的 `KNOWN_CAUGHT`（汉化包脚本自己 try/catch 的两处）、`KNOWN_DIALOGS`（汉化包的防倒卖提示）
+和 `WIN32_STUBS`（Windows 专有、无对应功能的 stub）。
+
+快的原因（改测试时别丢）：Xvfb 没有 vsync，空闲实例会以 ~150 帧/秒占满约 2 个核，所以 `run.py` 用 `SDL_MAIN_CALLBACK_RATE=60`
+限制主循环、每个用例用 `-maxfps` 限制呈现（视频用例 30，其余 8），`-drawthread=2`、`LP_NUM_THREADS=1`；REPL 每帧只应答一个请求，
+`Session.step` 把统计、状态和截图请求并成一次调用；等待一律用条件而不是固定 sleep；标题动画和开场转场用点击跳过；
+判断“画面在动”的帧用不压缩的 `.bmp` 截图。这台机器上全量受 CPU 限制（满载降频），用例本身的 CPU 时间也写在 `summary.txt` 里。
 
 其他工具（`tests/`）：
 
@@ -93,3 +106,5 @@ TJS 里 `CompatNative.resetFrameStats("scene")` / `frameStats()` / `storageStats
 
 背景预读：`prelude/game.tjs` 在剧本播放时向前看 30 行，把将要显示的 PNG/JPEG 背景（含 `_cn` 本地化版本）交给引擎的加载线程解码；
 `-lllj_prefetch=no` 关闭（对比测量用，见 `tests/perf/bgprefetch.py`）。
+
+`-lllj_logo=no` 跳过启动时的注意事项和品牌 Logo，直接进标题（游戏自带的 `SystemConfig.stopSkipOnMessageReceived` 路径；测试用例用它）。

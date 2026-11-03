@@ -31,7 +31,7 @@ def evaluate(channel, expression, timeout=20, modal_answer=None):
                 if not data.get("ok"):
                     raise RuntimeError(data.get("error") or str(data))
                 return data
-            time.sleep(0.025)
+            time.sleep(0.005)
         raise TimeoutError(f"REPL timed out after {timeout}s: {expression[:120]}")
 
 

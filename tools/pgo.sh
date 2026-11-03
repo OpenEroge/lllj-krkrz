@@ -9,8 +9,7 @@
 #    Each run must end with a normal exit, which is when the counters are written.
 #      perf/ab.py      60 s of skip: TJS VM, KAG, text rendering, layer compositing
 #      perf/menu.py    settings screen open/close (UI construction)
-#      scenarios.py    smoke (title, dialogue, backlog, save/load, gallery, settings),
-#                      emote on the GL backend, the Chinese patch, movies
+#      run.py          the smoke, zh and movie test cases, and emote on the GL backend
 # 3. Rebuilds build/linux-x64 with LLLJ_PGO=use (kept in its cache; ./build.sh -DLLLJ_PGO=
 #    turns it off again).
 # env: BUILD_JOBS, VCPKG_ROOT (as build.sh), LLLJ_PGO_DIR (default build/pgo-profile),
@@ -39,10 +38,8 @@ train() {
 cd "$ROOT"
 train skip   python3 -I "$TESTS/perf/ab.py" "$OUT/skip" 60
 train menu   python3 -I "$TESTS/perf/menu.py" "$OUT/menu" 10
-train smoke  python3 -I "$TESTS/scenarios.py" "$OUT/smoke" 8
-train emote  python3 -I "$TESTS/scenarios.py" "$OUT/emote" --only emote --engine-arg=-emote=gl
-train zh     python3 -I "$TESTS/scenarios.py" "$OUT/zh" --only zh
-train movie  python3 -I "$TESTS/scenarios.py" "$OUT/movie" --only movie
+train cases  python3 -I "$TESTS/run.py" -o "$OUT/cases" -j 4 smoke zh movie
+train emote  python3 -I "$TESTS/run.py" -o "$OUT/emote" -j 4 emote --engine-arg=-emote=gl
 if [[ -z "$(find "$PROFILE" -name '*.gcda' -print -quit 2>/dev/null)" ]]; then
 	echo "no profile was written to $PROFILE (did the game exit normally?)" >&2
 	exit 1

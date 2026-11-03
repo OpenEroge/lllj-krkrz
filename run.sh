@@ -3,6 +3,7 @@
 #   ./run.sh [engine options...]            GAME=<profile> selects games/<profile>/ (default lllj)
 # env: HEADLESS=1  -> private Xvfb display + dummy audio (for automated tests)
 #      REPLCH=dir  -> enable the REPL file channel in dir (tools/dev/repl.sh)
+#      KRKRZ_STAGE=only|skip -> only copy the engine into the run directory / skip copying
 #      KRKRZ_BIN_DIR=dir -> run the krkrz/libSDL3 from dir instead of the Release build
 #                    (e.g. the PGO training build, or a saved binary for A/B runs)
 set -euo pipefail
@@ -12,6 +13,9 @@ source "$ROOT/games/$GAME/game.conf"
 BIN="${KRKRZ_BIN_DIR:-$ROOT/build/linux-x64/core/Release}"
 RUN="$ROOT/$RUN_DIR"
 mkdir -p "$RUN"
+# KRKRZ_STAGE=only copies the engine into the run directory and exits; =skip uses what is
+# there (games/lllj/tests/run.py stages once, then starts many instances in parallel).
+if [[ "${KRKRZ_STAGE:-}" != skip ]]; then
 # Atomic replacement permits rebuilding while another isolated instance runs.
 EXE_TMP=$(mktemp "$RUN/.krkrz.XXXXXX")
 cp "$BIN/krkrz" "$EXE_TMP"
@@ -37,6 +41,8 @@ for pd in "${PLACEHOLDER_DIRS[@]}"; do
 	mkdir -p "$RUN/$pd"
 	for d in "${PLACEHOLDER_DLLS[@]}"; do : > "$RUN/$pd/$d.dll"; done
 done
+fi
+[[ "${KRKRZ_STAGE:-}" != only ]] || exit 0
 game_prepare "$@"
 ARGS=("$RUN/" "${ENGINE_ARGS[@]}")
 if [ -n "${REPLCH:-}" ]; then

@@ -12,7 +12,9 @@ xdotool windowfocus --sync "$W"
 if [[ "$1" == key ]]; then
     # XTest updates the server/SDL modifier state; --window uses SendEvent and
     # can leave synthetic modifiers latched when fullscreen changes focus.
-    xdotool key "$2"
+    # Held for 50 ms like a real key press: press and release in one engine frame
+    # can reach KAG with the key already up again.
+    xdotool keydown "$2" sleep 0.05 keyup "$2"
 else
     xdotool mousemove --window "$W" "$1" "$2" sleep 0.1 click "${3:-1}"
 fi

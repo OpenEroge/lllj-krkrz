@@ -82,4 +82,5 @@ CMakeLists.txt（顶层）
 ## 测试
 
 每个游戏在 `games/<game>/tests/` 下有自己的场景回归：脚本启动隔离的 Xvfb 实例，经 REPL 文件通道（`tools/dev/repl.py`）
-驱动游戏、截图、断言，并检查日志里没有未经评估的异常和 stub。`games/lllj/tests/regress.sh` 一次跑完全部套件。
+驱动游戏、截图、断言，并检查日志里没有未经评估的异常和 stub。测试拆成互相独立的用例，由 `games/lllj/tests/run.py` 并行运行：
+日常改动用 `run.py --changed` 只跑相关用例，`games/lllj/tests/regress.sh` 是全量，只在一批改动完成或被要求时跑。
