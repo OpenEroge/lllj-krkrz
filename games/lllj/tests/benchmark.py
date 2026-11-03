@@ -43,6 +43,16 @@ def benchmark(session, seconds):
     return check_log(session.out / "game.log")
 
 
+def emote_step(session, name, seconds):
+    """session.step plus the E-mote stage times (CompatNative.emoteStats) of that window."""
+    session.obj("CompatNative.emoteStats()")  # reset the counters
+    session.step(name, seconds)
+    session.steps[-1]["emote_stats"] = stats = session.obj("CompatNative.emoteStats()")
+    calls = max(1, stats["draw_call_n"])
+    print("  per draw ms: " + ", ".join(f"{k}={stats[k + '_ms'] / calls:.2f}" for k in
+                                        ("progress", "draw", "readback", "lock", "convert")), flush=True)
+
+
 def emote_benchmark(session, seconds):
     root = Path(__file__).resolve().parent
     session.boot()
@@ -57,15 +67,15 @@ def emote_benchmark(session, seconds):
         session.ev(f"tf.llljEv={json.dumps(name)}")
         session.ev('kag.process("emote_test.ks","*ev")')
         time.sleep(1)
-        session.step(f"emote_{name}", seconds)
+        emote_step(session, f"emote_{name}", seconds)
     # One-shot motions: the title intro (~2.75s) and the eyecatch (~3s).
     session.ev('tf.llljEv="title_bg7"')
     session.ev('CompatNative.resetFrameStats("emote_title_intro")')
     session.ev('kag.process("emote_test.ks","*ev")')
-    session.step("emote_title_intro", 2.5)
+    emote_step(session, "emote_title_intro", 2.5)
     session.ev('CompatNative.resetFrameStats("emote_eyecatch")')
     session.ev('kag.process("emote_test.ks","*eyecatch")')
-    session.step("emote_eyecatch", 3)
+    emote_step(session, "emote_eyecatch", 3)
     return check_log(session.out / "game.log")
 
 
@@ -93,9 +103,10 @@ def main():
     parser.add_argument("--emote", action="store_true", help="sample E-mote scenes (batch 2)")
     parser.add_argument("--movie", action="store_true", help="sample gallery movies (batch 3)")
     parser.add_argument("--desktop", action="store_true", help="use the current desktop display; audio remains dummy")
+    parser.add_argument("--engine-arg", action="append", default=[], help="extra engine option, e.g. -emote=gl")
     args = parser.parse_args()
-    session = Session(args.out, ("-autopath_incremental=no",) if args.legacy_index else (), gallery_seed=args.movie,
-                      headless=not args.desktop)
+    extra = (("-autopath_incremental=no",) if args.legacy_index else ()) + tuple(args.engine_arg)
+    session = Session(args.out, extra, gallery_seed=args.movie, headless=not args.desktop)
     try:
         run = movie_benchmark if args.movie else emote_benchmark if args.emote else benchmark
         known = run(session, args.seconds)

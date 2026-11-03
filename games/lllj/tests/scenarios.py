@@ -63,7 +63,8 @@ class Session:
         if self.proc.poll() is None:
             self.proc.terminate() # launcher stops game before its X server
             try:
-                self.proc.wait(timeout=5)
+                # An instrumented (PGO) build writes its profile at exit and needs longer.
+                self.proc.wait(timeout=float(os.environ.get("KRKRZ_EXIT_TIMEOUT", "5")))
             except subprocess.TimeoutExpired:
                 os.killpg(self.proc.pid, signal.SIGKILL)
                 self.proc.wait()

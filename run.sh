@@ -3,11 +3,13 @@
 #   ./run.sh [engine options...]            GAME=<profile> selects games/<profile>/ (default lllj)
 # env: HEADLESS=1  -> private Xvfb display + dummy audio (for automated tests)
 #      REPLCH=dir  -> enable the REPL file channel in dir (tools/dev/repl.sh)
+#      KRKRZ_BIN_DIR=dir -> run the krkrz/libSDL3 from dir instead of the Release build
+#                    (e.g. the PGO training build, or a saved binary for A/B runs)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 GAME="${GAME:-lllj}"
 source "$ROOT/games/$GAME/game.conf"
-BIN="$ROOT/build/linux-x64/core/Release"
+BIN="${KRKRZ_BIN_DIR:-$ROOT/build/linux-x64/core/Release}"
 RUN="$ROOT/$RUN_DIR"
 mkdir -p "$RUN"
 # Atomic replacement permits rebuilding while another isolated instance runs.

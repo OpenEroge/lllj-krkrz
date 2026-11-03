@@ -10,11 +10,14 @@
 | `resample_bench.py OUT` | `Layer.stretchCopy`（stLinear/stCubic，1080p→1440p）耗时 |
 | `pixel_check.py OUT` | 跑一组固定的图层操作并保存 BMP，打印哈希；不同 `-drawthread`/`-drawthreadchunk` 下哈希应该一致 |
 | `sample.py OUT N` / `wsample.py OUT N` | 快进期间用 gdb 抽栈（主线程 / 全部线程） |
+| `menu.py OUT [N]` | 游戏中开关设置画面 N 次（默认 20），输出每次开关的主线程 CPU 毫秒、最长呈现间隔 |
+| `png_bench.py OUT [N]` | 标题画面下用 `Layer.loadImages` 读 N 张背景 PNG（每张前清图像缓存，取三次最快），输出中位数/均值毫秒 |
 
 共用环境变量：
 - `EXTRA="..."`：额外启动参数
 - `DESK=1`：在当前桌面跑，否则用私有 Xvfb
 - `FULL=1`：全屏（仅 `ab.py`）
+- `KRKRZ_BIN_DIR=目录`：`run.sh` 改用该目录里的 `krkrz`/`libSDL3`（A/B 对比旧二进制、PGO 训练构建）
 
 注意：
 - 本机 perf 打不开事件（`perf_event_paranoid`），所以用 `schedstat` 和 gdb 抽样代替。
