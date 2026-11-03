@@ -466,7 +466,10 @@ def movie(session, vomstyle=None):
         start_movie(session, label, expect)
         # several EDs open on seconds of black; compare frames from mid-movie (also a seek test)
         session.ev("kag.movies[0].position = 30000")
-        session.wait("kag.movies[0].position >= 30000 && kag.movies[0].position < 33000", 10)
+        # Sample once playback has resumed after the seek (decoding up from the
+        # previous keyframe takes a moment); the check below is about advancing
+        # while playing, not about how long the screenshots take.
+        session.wait("kag.movies[0].position > 30000 && kag.movies[0].position < 33000", 10)
         first = session.obj(MOVIE_STATE)
         distinct = frames_differ(session, name, 3, 0.5)
         second = session.obj(MOVIE_STATE)
